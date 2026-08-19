@@ -31,7 +31,10 @@ class ArxivSearchTool(BaseTool):
         if not query:
             return ToolResult.fail(error="Missing required parameter: query")
 
-        max_results = min(kwargs.get("max_results", 20), settings.retrieval.arxiv_max_results)
+        requested_max_results = kwargs.get("max_results", 20)
+        if requested_max_results <= 0:
+            return ToolResult.fail(error="max_results must be greater than 0")
+        max_results = min(requested_max_results, settings.retrieval.arxiv_max_results)
         categories = kwargs.get("categories")
         date_from = kwargs.get("date_from")
         date_to = kwargs.get("date_to")

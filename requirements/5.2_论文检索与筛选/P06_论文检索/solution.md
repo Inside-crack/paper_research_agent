@@ -4,7 +4,7 @@
 **需求名称**：论文检索  
 **所属模块**：论文检索与筛选  
 **创建日期**：2026-08-14  
-**最后更新**：2026-08-14  
+**最后更新**：2026-08-19
 
 ---
 
@@ -29,6 +29,19 @@
 ### 接口设计
 
 （如涉及API接口，描述接口定义、输入输出等）
+
+### 2026-08-19 实现补充
+
+`ArxivSearchTool._execute` 在构造 arXiv 客户端前校验
+`max_results`：当 `max_results <= 0` 时返回精确错误
+`max_results must be greater than 0`。正数 `max_results` 继续进入原有检索流程，
+缺少 `query` 时仍返回 `Missing required parameter: query`。
+
+实现文件：`src/paper_agent/tools/retrieval/arxiv_tool.py`。
+验证文件：`examples/test_paper_retrieval_validation.py`。
+验证命令
+`PYTHONPATH=src python3 -m pytest -q examples/test_paper_retrieval_validation.py`
+通过，3 个测试全部通过。
 
 ### 数据结构
 

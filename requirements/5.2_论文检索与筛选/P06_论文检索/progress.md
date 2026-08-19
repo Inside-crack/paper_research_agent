@@ -8,6 +8,7 @@
   - 支持关键词搜索
   - 支持分类过滤（cat:cs.AI/cs.CL/cs.LG等）
   - 支持结果数量控制（max_results）
+  - [x] 校验非正 `max_results` 并返回 `max_results must be greater than 0`
   - 返回结构化结果：arxiv_id/title/authors/date/categories/abstract/code hint
 - [x] ArxivGetPaperTool工具（获取单篇论文详情）
 - [x] Orchestrator端跨查询自动去重（_deduplicate_search_results）
@@ -23,6 +24,9 @@
 - `src/paper_agent/evaluation_agent/agent.py` - PAPER_RETRIEVAL_CHECKS
 
 ## 验证情况
+- ✅ 2026-08-19 完成非正 `max_results` 校验及保留行为验证：
+  `PYTHONPATH=src python3 -m pytest -q examples/test_paper_retrieval_validation.py`
+  通过，3 个测试全部通过
 - ✅ arXiv API连通，单次返回15-20篇结果
 - ✅ 多关键词组合搜索正常（multi-agent/tool-use/framework/survey等）
 - ✅ Orchestrator预去重：4次搜索×15篇→去重后约40-50篇唯一论文
