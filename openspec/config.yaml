@@ -1,0 +1,14 @@
+schema: spec-driven
+
+context: |
+  Paper Research Agent is a Python research and experiment-reproduction system.
+  It uses a Research Agent, an independent Evaluation Agent, and an Orchestrator
+  state machine. Existing requirements/ documents remain the historical and
+  project-specific planning source until the baseline migration is reviewed.
+
+rules:
+  delta:
+    - REMOVED Requirements MUST include a Migration note.
+    - Every Requirement MUST have at least one Scenario.
+  spec:
+    - Capability names use kebab-case business noun phrases.

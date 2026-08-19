@@ -1,0 +1,94 @@
+# Capability: paper-retrieval
+
+> Baseline - reverse-engineered by the `ss-reverse-spec` skill.
+> Generated at commit: `aca8f3c`
+> Date: 2026-08-19
+> Legacy requirements: P05-P09
+
+## Purpose
+
+The system searches arXiv and fetches individual papers, returning structured
+metadata that can be used by the Research Agent and persisted as candidate
+artifacts.
+
+## Requirements
+
+### Requirement: Search arXiv with validated query input
+
+The system SHALL require a non-empty query for arXiv search and SHALL return a
+structured result set containing the original query, result count, and paper
+metadata.
+
+#### Scenario: Valid search request
+
+- **WHEN** the caller provides a non-empty query
+- **THEN** the system searches arXiv and returns paper IDs, titles, authors,
+  abstracts, URLs, dates, categories, versions, and code availability hints.
+
+#### Scenario: Missing query
+
+- **WHEN** the caller omits or provides an empty query
+- **THEN** the tool returns a failed `ToolResult` with a missing-query error.
+
+Evidence: `src/paper_agent/tools/retrieval/arxiv_tool.py`.
+
+### Requirement: Apply retrieval filters and bounded result limits
+
+The system SHALL support category filters, publication date bounds, relevance
+or date sorting, and SHALL cap the requested result count at the configured
+maximum.
+
+#### Scenario: Category and date filters are provided
+
+- **WHEN** the caller supplies categories or date bounds
+- **THEN** the search query includes the category constraints and returned
+  papers outside the date bounds are excluded.
+
+#### Scenario: Requested result count exceeds the configured maximum
+
+- **WHEN** `max_results` is greater than the configured limit
+- **THEN** the tool uses the configured maximum rather than the caller's larger
+  value.
+
+Evidence: `src/paper_agent/tools/retrieval/arxiv_tool.py`,
+`src/paper_agent/common/config.py`.
+
+### Requirement: Fetch a specific arXiv paper
+
+The system SHALL require an arXiv ID and SHALL return the same structured paper
+metadata shape used by search results.
+
+#### Scenario: Valid paper ID
+
+- **WHEN** the caller provides an existing arXiv ID
+- **THEN** the tool returns the paper metadata including title, authors,
+  abstract, PDF URL, version, and source.
+
+#### Scenario: Missing or unknown paper ID
+
+- **WHEN** the caller omits the ID or no paper matches it
+- **THEN** the tool returns a failed `ToolResult` with an explicit error.
+
+Evidence: `src/paper_agent/tools/retrieval/arxiv_tool.py`,
+`src/paper_agent/common/models/paper_candidate.py`.
+
+### Requirement: Preserve retrieval evidence while reducing prompt payload
+
+The system SHALL deduplicate repeated arXiv results by the base arXiv ID before
+synthesis and SHALL retain a persisted-artifact reference when displaying only
+a bounded result preview.
+
+#### Scenario: Multiple searches return the same paper
+
+- **WHEN** completed search steps contain the same paper ID or versioned forms
+- **THEN** the synthesis input contains one paper entry for that base ID.
+
+#### Scenario: Search returns more papers than the prompt display limit
+
+- **WHEN** the search result set exceeds the display limit
+- **THEN** the prompt displays a bounded list and points to the complete
+  persisted artifact.
+
+Evidence: `src/paper_agent/orchestrator/orchestrator.py`,
+`src/paper_agent/common/agent_base.py`,
+`examples/test_b01_b02_compression.py`.
