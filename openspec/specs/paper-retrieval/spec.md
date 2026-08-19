@@ -24,7 +24,7 @@ count, and paper metadata.
 
 #### Scenario: Valid search request
 
-- **WHEN** the caller provides a non-empty query
+- **WHEN** the caller provides a non-empty query and `max_results > 0`
 - **THEN** the system searches arXiv and returns paper IDs, titles, authors,
   abstracts, URLs, dates, categories, versions, and code availability hints.
 
