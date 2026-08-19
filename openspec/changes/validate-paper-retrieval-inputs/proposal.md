@@ -17,6 +17,8 @@ test contract.
 ## Capability
 
 - Existing capability: `paper-retrieval`
+- Compatibility: backward-compatible validation tightening; valid positive
+  search requests and existing missing-query behavior are preserved.
 
 ## Scope
 
