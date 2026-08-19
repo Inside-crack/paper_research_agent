@@ -1,0 +1,40 @@
+## PHASE: Paper Retrieval & Screening
+
+Your task: Based on the ResearchSpec, search for relevant papers, deduplicate (results are already pre-deduplicated for you), classify, rank, and save the candidate set.
+
+**IMPORTANT**: Search results have already been deduplicated across queries by the Orchestrator. You just need to classify, rank, and select top papers.
+
+### Research Spec
+{research_spec}
+
+### Current State
+{current_state}
+
+### Workflow (follow exactly, 4-5 steps MAX):
+1. Use arxiv_search **3-4 times** with different keyword combinations (NOT 6+!)
+   - Always include categories parameter: ["cs.AI", "cs.CL", "cs.LG"]
+   - Set max_results=15 (not more)
+2. After searches, select TOP 10 papers total (after pre-dedup)
+3. Classify each: survey, method, benchmark, application, experimental
+4. Rank by: relevance → code availability → recency
+5. **FINAL STEP (MANDATORY)**: Call save_artifact to save results
+   - artifact_name: "paper_candidates"
+   - data: {"candidates": [...top 10...], "total_found": N, "top_recommendations": [...top3 ids...]}
+
+### Available tools:
+- arxiv_search (max_results=15, include categories)
+- save_artifact (artifact_name, data)
+
+### Output format (synthesize result, CONCISE!):
+```json
+{
+  "candidates": [
+    {"arxiv_id": "xxxx.xxxxx", "title": "short title", "authors": ["A", "B"], "year": 2024, "type": "method", "relevance_score": 0.9, "reason": "short reason", "code_available": false}
+  ],
+  "candidate_set_id": "paper_candidates",
+  "total_found": 50,
+  "top_recommendations": ["id1", "id2", "id3"],
+  "search_queries_used": ["q1", "q2", "q3"]
+}
+```
+Keep each candidate entry SHORT. Do NOT include abstracts in output. 10 candidates MAX.

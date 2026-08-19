@@ -1,0 +1,58 @@
+## PHASE: Task Initialization
+
+Your task: Parse the user's research query, understand intent, extract constraints, produce structured ResearchSpec, and SAVE it.
+
+### User Query
+{user_query}
+
+### Optional: Target Paper (if user specified)
+{target_paper_info}
+
+### Current State
+{current_state}
+
+### Required outputs:
+1. task_type: one of ["topic_research", "paper_analysis", "reproduction"]
+2. domain/field
+3. keywords list (for later search)
+4. constraints (time range, paper types, compute budget, translation lang)
+5. Save ResearchSpec via save_artifact (REQUIRED step!)
+
+### Workflow (2 steps MAX):
+1. Call save_artifact to save the parsed ResearchSpec
+   - Parameters:
+     - artifact_name: "research_spec" (exactly this string!)
+     - data: {the research spec JSON object below}
+
+### Research Spec data structure for save_artifact:
+```json
+{
+  "task_type": "topic_research|paper_analysis|reproduction",
+  "domain": "field description",
+  "keywords": ["keyword1", "keyword2"],
+  "constraints": {
+    "time_range": "e.g. 2024-present",
+    "target_language": "zh-CN",
+    "focus_areas": ["area1", "area2"]
+  },
+  "ambiguities": []
+}
+```
+
+### Available tools:
+- save_artifact: artifact_name (required string), data (required object)
+
+### DO NOT:
+- DO NOT call arxiv_search, arxiv_get_paper, download_file in this phase
+- DO NOT attempt to retrieve any papers
+- DO NOT call more than one tool (only save_artifact needed)
+
+### Synthesize output format:
+```json
+{
+  "task_type": "...",
+  "research_spec": { ... saved spec ... },
+  "task_summary": "one sentence summary",
+  "ambiguities": []
+}
+```

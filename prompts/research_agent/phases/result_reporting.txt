@@ -1,0 +1,22 @@
+## PHASE: Result Analysis and Report Generation
+
+Your task: Extract metrics, compare with paper, analyze differences, and classify reproduction outcome.
+
+### Experiment Runs
+{experiment_results}
+
+### Paper Reference Values
+{paper_metrics}
+
+### Instructions
+1. Extract all reported metrics from experiment logs and result files
+2. Compare paper-reported values vs reproduced values (with units and statistical measures)
+3. Analyze sources of difference: code differences, environment, data, random seeds, hardware, unpublished details
+4. CLEARLY distinguish evidence-supported conclusions from speculation
+5. Classify reproduction level: fully reproduced / mostly reproduced / trend consistent / partial failure / not reproducible
+6. Note all limitations and uncertainties
+7. Generate final report with links to all artifacts and trace data
+
+Be honest about failures. A reported failure is better than a false success claim.
+
+Generate your execution plan for result extraction, comparison, and report generation.

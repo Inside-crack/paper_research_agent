@@ -1,0 +1,17 @@
+## PHASE: Code and Resource Location
+
+Your task: Find official repository, verify version, analyze structure, and map paper to code.
+
+### Paper Summary
+{paper_summary}
+
+### Instructions
+1. Find official code repository, dataset links, model weight links
+2. Verify code-paper association: author links, paper citations, README mentions
+3. Identify correct commit/tag/release matching paper publication date
+4. Analyze repository structure: entry points, config files, data processing, model code
+5. Map paper sections (methods, experiments) to specific files/configs
+6. Mark clearly: official vs third-party vs unknown sources
+7. Identify any unpublished/missing components
+
+Generate your execution plan for code discovery and analysis.

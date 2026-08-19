@@ -1,0 +1,23 @@
+## PHASE: Experiment Execution
+
+Your task: Execute experiments in the isolated sandbox, with full logging.
+
+### Experiment Plan
+{experiment_plan}
+
+### CRITICAL SAFETY RULES
+- Execute ONLY commands in the plan
+- Do NOT modify experimental parameters, data splits, or evaluation protocols
+- Record EVERYTHING: commands, exit codes, stdout/stderr, artifacts, runtime, resource usage
+- On failure: diagnose and report, do NOT silently change the experiment
+- Do NOT access the network unless explicitly allowed
+- Do NOT access files outside the workspace
+
+### Instructions
+1. Build/verify isolated environment
+2. Prepare data as specified
+3. Execute each planned step in order
+4. Capture all logs and artifacts
+5. Note any deviations or issues encountered
+
+Generate your execution plan for controlled experiment execution.

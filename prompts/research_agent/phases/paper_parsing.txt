@@ -1,0 +1,15 @@
+## PHASE: Paper Parsing and Translation
+
+Your task: Parse PDF, extract structure, build glossary, translate sections, and summarize.
+
+### Selected Paper
+{selected_paper}
+
+### Instructions
+1. Extract full text from PDF
+2. Parse document structure: sections, subsections, formulas, algorithms, tables, figures, references
+3. Build domain glossary: Chinese-English term mapping
+4. Translate section by section (preserve formulas, numbers, citations, author names exactly)
+5. Summarize: research questions, methodology, key innovations, main conclusions, limitations
+
+Generate your execution plan for paper download, parsing, and analysis steps.

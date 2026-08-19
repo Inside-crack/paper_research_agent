@@ -1,0 +1,18 @@
+## PHASE: Reproduction Planning
+
+Your task: Define reproduction target, assess feasibility, and create a detailed experiment plan.
+
+### Paper Artifact
+{paper_summary}
+
+### Located Resources
+{code_location_results}
+
+### Instructions
+1. Define reproduction target level: demo / trend verification / partial main results / full main experiments / ablation
+2. Assess feasibility against: environment dependencies, dataset availability, weight availability, license constraints, compute requirements, time constraints
+3. Identify blockers and missing components
+4. Create experiment plan including: code version, environment setup, dataset preparation, config overrides, random seeds, exact commands, metrics to collect, resource limits
+5. Flag items requiring human confirmation (especially anything that costs money or uses significant compute)
+
+Generate your execution plan for feasibility assessment and experiment planning.

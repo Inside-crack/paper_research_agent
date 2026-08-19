@@ -1,0 +1,73 @@
+app_name: paper-research-agent
+app_version: 0.1.0
+environment: development
+
+llm:
+  provider: deepseek
+  api_key: ""
+  base_url: "https://api.deepseek.com/v1"
+  model: deepseek-v4-flash
+  eval_model: deepseek-v4-pro
+  temperature: 0.1
+  max_tokens: 8192
+  timeout: 180
+
+research_agent:
+  temperature: 0.3
+  system_prompt_path: prompts/research_agent/system.txt
+
+evaluation_agent:
+  temperature: 0.0
+  system_prompt_path: prompts/evaluation_agent/system.txt
+
+budget:
+  max_tokens_per_task: 500000
+  max_gpu_minutes: 60
+  max_wall_time_minutes: 120
+  max_revisions_per_stage: 1
+
+stages:
+  - name: task_initialization
+    display_name: 任务初始化
+    revision_allowed: true
+  - name: paper_retrieval
+    display_name: 论文检索
+    revision_allowed: true
+  - name: paper_parsing
+    display_name: 论文解析翻译
+    revision_allowed: true
+  - name: code_location
+    display_name: 代码资源定位
+    revision_allowed: true
+  - name: reproduction_planning
+    display_name: 复现规划
+    revision_allowed: true
+  - name: experiment_execution
+    display_name: 实验执行
+    revision_allowed: true
+    requires_human_confirmation: true
+  - name: result_reporting
+    display_name: 结果分析报告
+    revision_allowed: true
+
+sandbox:
+  enabled: true
+  type: docker
+  docker_image: python:3.10-slim
+  allow_network: false
+  cpu_limit: "2"
+  memory_limit: "4g"
+  timeout: 1800
+
+retrieval:
+  arxiv_max_results: 50
+  arxiv_wait_seconds: 3
+  sources:
+    - arxiv
+    - openreview
+    - github
+
+logging:
+  level: INFO
+  format: json
+  trace_enabled: true
