@@ -7,9 +7,19 @@ import sys
 from pathlib import Path
 
 from .common.config import get_settings
+from .common.capabilities import (
+    CapabilityCatalog,
+    CapabilityRegistry,
+    LLMIntentDecisionRouter,
+    LLMIntentRouterProvider,
+    register_default_capabilities,
+)
+from .common.conversation_service import ConversationService
+from .common.llm import create_llm
 from .common.logging import setup_logging
-from .common.persistence import StatePersistence
+from .common.persistence import ConversationStore, StatePersistence
 from .orchestrator import Orchestrator
+from .tools import get_default_registry
 
 
 def _json_out(data, exit_code: int = 0) -> None:
@@ -115,6 +125,48 @@ async def cmd_task_resume(args) -> None:
     })
 
 
+async def cmd_chat(args) -> None:
+    setup_logging()
+    settings = get_settings()
+    store = ConversationStore(settings.artifact_dir)
+    if args.session_id:
+        session = store.load_session(args.session_id)
+        if session is None:
+            _error("session_not_found", f"Conversation session not found: {args.session_id}")
+    else:
+        session = store.create_session()
+
+    capability_registry = CapabilityRegistry()
+    register_default_capabilities(capability_registry, get_default_registry())
+    llm_router = LLMIntentDecisionRouter(
+        LLMIntentRouterProvider(create_llm()),
+        CapabilityCatalog.from_registry(capability_registry),
+    )
+    service = ConversationService(
+        store,
+        capability_registry,
+        llm_router=llm_router,
+    )
+
+    print(json.dumps({
+        "session_id": session.session_id,
+        "status": "active",
+        "message": "Chat started. Type /exit to quit.",
+    }, ensure_ascii=False))
+
+    while True:
+        try:
+            content = await asyncio.to_thread(input, "> ")
+        except EOFError:
+            break
+        if content.strip().lower() in {"/exit", "/quit", "exit", "quit"}:
+            break
+        if not content.strip():
+            continue
+        response = await service.handle_message(session.session_id, content)
+        print(json.dumps(response, ensure_ascii=False, default=str))
+
+
 def main():
     parser = argparse.ArgumentParser(description="论文研究与实验复现 Agent")
     parser.add_argument("--paper", "-p", help="目标论文URL或arXiv ID")
@@ -125,6 +177,10 @@ def main():
     p_run = subparsers.add_parser("run", help="运行研究任务")
     p_run.add_argument("query", nargs="?", help="研究主题、论文标题或复现目标")
     p_run.set_defaults(func=cmd_run)
+
+    p_chat = subparsers.add_parser("chat", help="启动最小论文检索聊天")
+    p_chat.add_argument("--session-id", help="复用已有会话")
+    p_chat.set_defaults(func=cmd_chat)
 
     p_tasks = subparsers.add_parser("tasks", help="任务管理")
     tasks_sub = p_tasks.add_subparsers(dest="tasks_cmd")

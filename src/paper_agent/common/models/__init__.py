@@ -21,6 +21,13 @@ from .task_state import (
     TaskState,
 )
 from .execution_plan import ExecutionPlan, PlanStep
+from .conversation import (
+    ConversationContext,
+    ConversationMessage,
+    ConversationMessageRole,
+    ConversationSession,
+    ConversationSessionStatus,
+)
 
 __all__ = [
     "TaskPhase",
@@ -51,4 +58,9 @@ __all__ = [
     "PAPER_PROCESSING_SUBSTEPS",
     "ExecutionPlan",
     "PlanStep",
+    "ConversationMessage",
+    "ConversationMessageRole",
+    "ConversationContext",
+    "ConversationSession",
+    "ConversationSessionStatus",
 ]
