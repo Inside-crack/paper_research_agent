@@ -8,8 +8,20 @@ Your task: Parse PDF, extract structure, build glossary, translate sections, and
 ### Instructions
 1. Extract full text from PDF
 2. Parse document structure: sections, subsections, formulas, algorithms, tables, figures, references
-3. Build domain glossary: Chinese-English term mapping
+3. Build domain glossary: Chinese-English term mapping. After parsing, call
+   `paper_glossary` with the parsed artifact path and a `terms` list. Each item
+   MUST contain `source_term`, `target_term`, `context`, and `confidence` in [0, 1].
+   Only include source terms that occur verbatim in the extracted original text.
+   The tool validates evidence, deduplicates terms, and persists the glossary.
 4. Translate section by section (preserve formulas, numbers, citations, author names exactly)
+   After generating all section translations, call `paper_translate` with the parsed
+   artifact path and a `translations` list containing exactly one
+   `{"section_id": "...", "translated_text": "..."}` item per section. The tool
+   validates protected content and persists the translations.
 5. Summarize: research questions, methodology, key innovations, main conclusions, limitations
+   Then call `paper_summary` with a `summary` object containing these fields plus
+   `evidence`, where each non-empty category maps to one or more existing section IDs:
+   `research_questions`, `methodology_summary`, `contributions`, `conclusions`,
+   and `limitations`. Do not add claims without section evidence.
 
 Generate your execution plan for paper download, parsing, and analysis steps.

@@ -5,6 +5,13 @@ from typing import Optional
 from ..common.tools.base import BaseTool, ToolResult, tool
 from ..common.tools.registry import ToolRegistry, global_registry
 from .filesystem.file_tools import DownloadFileTool, LoadArtifactTool, SaveArtifactTool
+from .paper_processing import (
+    PaperDownloadTool,
+    PaperGlossaryTool,
+    PaperParseTool,
+    PaperSummaryTool,
+    PaperTranslateTool,
+)
 from .retrieval.arxiv_tool import ArxivGetPaperTool, ArxivSearchTool
 
 
@@ -14,6 +21,11 @@ def register_all_tools(registry: Optional[ToolRegistry] = None) -> ToolRegistry:
     reg.register(SaveArtifactTool())
     reg.register(LoadArtifactTool())
     reg.register(DownloadFileTool())
+    reg.register(PaperDownloadTool())
+    reg.register(PaperParseTool())
+    reg.register(PaperGlossaryTool())
+    reg.register(PaperTranslateTool())
+    reg.register(PaperSummaryTool())
 
     reg.register(ArxivSearchTool())
     reg.register(ArxivGetPaperTool())
@@ -40,4 +52,9 @@ __all__ = [
     "SaveArtifactTool",
     "LoadArtifactTool",
     "DownloadFileTool",
+    "PaperDownloadTool",
+    "PaperGlossaryTool",
+    "PaperParseTool",
+    "PaperTranslateTool",
+    "PaperSummaryTool",
 ]
