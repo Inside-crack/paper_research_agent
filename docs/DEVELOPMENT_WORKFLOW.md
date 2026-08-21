@@ -19,6 +19,18 @@
   -> ss-archive
 ```
 
+文档目录总览见 [`docs/README.md`](./README.md)。新增需求相关文档统一遵循：
+
+- 需求方案、进度、卡点和解决记录：`requirements/<需求目录>/`；
+- 技术提案：`docs/proposals/`；
+- 执行计划：`docs/plans/`；
+- 跨需求长期设计决策：`docs/decisions/`；
+- 普通历史文档：`docs/archive/`；
+- OpenSpec baseline、active change 和 change archive：继续保留在 `openspec/`。
+
+不要为了整理目录移动工作流规定的固定路径；文档失效时优先增加索引或状态说明，
+需要归档时按本文件第 9 节执行。
+
 ## 1. 工具职责
 
 | 工具 | 负责内容 | 不负责内容 |
@@ -395,4 +407,3 @@ PR 合并后：
 ```text
 使用 ss-archive 归档 <change-id>，并报告归档路径、变更数量、提交 SHA 和验证结果。
 ```
-

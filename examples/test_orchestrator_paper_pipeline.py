@@ -113,10 +113,10 @@ class FakePdf:
         return False
 
 
-def _plan():
+def _legacy_candidate_plan():
     return {
         "action": "plan",
-        "plan_name": "paper_parse_translate_summary",
+        "plan_name": "legacy_paper_candidate",
         "steps": [
             {
                 "step_id": "download",
@@ -131,18 +131,20 @@ def _plan():
                     }
                 },
             },
-            {
-                "step_id": "parse",
-                "description": "Parse PDF sections",
-                "tool_name": "paper_parse",
-                "arguments": {"artifact_path": ARTIFACT_PATH},
-            },
+        ],
+    }
+
+
+def _glossary_plan():
+    return {
+        "action": "plan",
+        "plan_name": "paper_glossary_content",
+        "steps": [
             {
                 "step_id": "glossary",
                 "description": "Persist glossary candidates",
                 "tool_name": "paper_glossary",
                 "arguments": {
-                    "artifact_path": ARTIFACT_PATH,
                     "terms": [
                         {
                             "source_term": "chain-of-thought",
@@ -159,12 +161,20 @@ def _plan():
                     ],
                 },
             },
+        ],
+    }
+
+
+def _translate_plan():
+    return {
+        "action": "plan",
+        "plan_name": "paper_translate_content",
+        "steps": [
             {
                 "step_id": "translate",
                 "description": "Translate every parsed section",
                 "tool_name": "paper_translate",
                 "arguments": {
-                    "artifact_path": ARTIFACT_PATH,
                     "translations": [
                         {
                             "section_id": "section_1",
@@ -179,12 +189,20 @@ def _plan():
                     ],
                 },
             },
+        ],
+    }
+
+
+def _summary_plan():
+    return {
+        "action": "plan",
+        "plan_name": "paper_summary_content",
+        "steps": [
             {
                 "step_id": "summary",
                 "description": "Create an evidence-linked summary",
                 "tool_name": "paper_summary",
                 "arguments": {
-                    "artifact_path": ARTIFACT_PATH,
                     "summary": {
                         "research_questions": ["如何提升工具使用效果？"],
                         "methodology_summary": "论文提出方法并在基准数据集上实验。",
@@ -204,16 +222,7 @@ def _plan():
     }
 
 
-def _synthesis():
-    return {
-        "sections": ["section_1", "section_2"],
-        "artifact_path": ARTIFACT_PATH,
-        "translation_completed": True,
-        "summary_evidence": {"conclusions": ["section_2"]},
-    }
-
-
-def _make_orchestrator(tmp_path, plan, synthesis, evaluation):
+def _make_orchestrator(tmp_path, llm_responses, evaluation):
     persistence = StatePersistence(tmp_path / "artifacts")
     registry = ToolRegistry()
     registry.register(TempSaveArtifactTool(persistence))
@@ -227,7 +236,7 @@ def _make_orchestrator(tmp_path, plan, synthesis, evaluation):
         registry.register(tool)
 
     research = ResearchAgent(
-        llm=FakeLLM([plan, synthesis]),
+        llm=FakeLLM(llm_responses),
         tool_registry=registry,
     )
     evaluator = EvaluationAgent(
@@ -265,8 +274,12 @@ def _make_orchestrator(tmp_path, plan, synthesis, evaluation):
 def test_real_orchestrator_and_research_agent_p10_p14_flow(tmp_path):
     orchestrator, task_state, persistence = _make_orchestrator(
         tmp_path,
-        _plan(),
-        _synthesis(),
+        [
+            _legacy_candidate_plan(),
+            _glossary_plan(),
+            _translate_plan(),
+            _summary_plan(),
+        ],
         {"verdict": "PASS", "score": 0.98, "summary": "All paper processing outputs are traceable."},
     )
     with patch(
@@ -285,15 +298,29 @@ def test_real_orchestrator_and_research_agent_p10_p14_flow(tmp_path):
     assert plan is not None
     assert len(plan.steps) == 5
     assert all(step.success for step in plan.steps)
-    assert orchestrator.research.llm.calls == 2
+    assert orchestrator.research.llm.calls == 4
     assert orchestrator.evaluation.llm.calls == 1
 
     artifact = json.loads(
         (persistence.base_dir / task_state.id / ARTIFACT_PATH).read_text(encoding="utf-8")
     )
-    assert artifact["full_text_translated"]
+    assert artifact["full_text_translated"] == (
+        "1 引言\n本文研究思维链工具使用。公式 (1)：x = 2。参见 [1]。\n\n"
+        "2 结果\n该方法在基准 [2] 上达到 95.5% 的准确率。"
+    )
     assert artifact["summary_evidence"]["conclusions"] == ["section_2"]
-    assert persistence.load_manifest(task_state.id) is not None
+    manifest = persistence.load_manifest(task_state.id)
+    assert manifest is not None
+    paper_phase = manifest.phases[TaskPhase.PAPER_PARSING.value]
+    assert paper_phase.artifacts.output == "paper_parsing_output.json"
+    assert all(
+        step.status == "PASS"
+        for step in paper_phase.paper_processing_steps.values()
+    )
+    assert any(
+        entry.name == ARTIFACT_PATH and entry.type == "paper_artifact"
+        for entry in manifest.files
+    )
 
 
 def test_real_orchestrator_does_not_pass_failed_tool_plan(tmp_path):
@@ -311,8 +338,7 @@ def test_real_orchestrator_does_not_pass_failed_tool_plan(tmp_path):
     }
     orchestrator, task_state, _ = _make_orchestrator(
         tmp_path,
-        invalid_plan,
-        {"sections": [], "error": "download failed"},
+        [invalid_plan],
         {"verdict": "REVISE", "score": 0.1, "summary": "The paper download step failed."},
     )
     result, plan = asyncio.run(

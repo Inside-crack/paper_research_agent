@@ -62,7 +62,7 @@ async def main():
     print()
 
     print("--- Running task initialization phase flow ---")
-    eval_result = await orchestrator._execute_phase_flow(TaskPhase.TASK_INITIALIZATION, task_state)
+    eval_result, _ = await orchestrator._execute_phase_flow(TaskPhase.TASK_INITIALIZATION, task_state)
 
     print()
     print("=" * 60)
