@@ -14,7 +14,12 @@ from .reproduction_spec import ReproductionSpec, ExperimentPlan
 from .experiment_run import ExperimentRun, ExperimentMetrics
 from .evaluation_result import EvaluationResult, EvaluationIssue, Correction
 from .final_report import FinalReport, ResultComparison
-from .task_state import TaskState, StageStatus
+from .task_state import (
+    PAPER_PROCESSING_SUBSTEPS,
+    PaperProcessingStepState,
+    StageStatus,
+    TaskState,
+)
 from .execution_plan import ExecutionPlan, PlanStep
 
 __all__ = [
@@ -42,6 +47,8 @@ __all__ = [
     "ResultComparison",
     "TaskState",
     "StageStatus",
+    "PaperProcessingStepState",
+    "PAPER_PROCESSING_SUBSTEPS",
     "ExecutionPlan",
     "PlanStep",
 ]

@@ -7,11 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import get_settings
 from ..logging import get_logger
 from ..models.base import TaskPhase
+from ..models.task_state import PAPER_PROCESSING_SUBSTEPS
 from .naming import phase_short, artifact_filename, parse_artifact_filename
 
 logger = get_logger(__name__)
@@ -38,6 +39,22 @@ class PhaseArtifacts(BaseModel):
     output: Optional[str] = None
 
 
+class PaperProcessingStepEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "not_started"
+    revision_count: int = 0
+    input_artifacts: list[str] = Field(default_factory=list)
+    output_artifacts: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+def _default_paper_processing_steps() -> dict[str, PaperProcessingStepEntry]:
+    return {name: PaperProcessingStepEntry() for name in PAPER_PROCESSING_SUBSTEPS}
+
+
 class PhaseEntry(BaseModel):
     status: str = "not_started"
     score: Optional[float] = None
@@ -47,6 +64,7 @@ class PhaseEntry(BaseModel):
     revisions: int = 0
     artifacts: PhaseArtifacts = Field(default_factory=PhaseArtifacts)
     steps: dict[str, StepSummary] = Field(default_factory=dict)
+    paper_processing_steps: dict[str, PaperProcessingStepEntry] = Field(default_factory=dict)
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -97,7 +115,9 @@ def _now_iso() -> str:
 
 
 def _init_phases() -> dict[str, PhaseEntry]:
-    return {p.value: PhaseEntry() for p in TaskPhase if p.value not in ("completed", "failed")}
+    phases = {p.value: PhaseEntry() for p in TaskPhase if p.value not in ("completed", "failed")}
+    phases[TaskPhase.PAPER_PARSING.value].paper_processing_steps = _default_paper_processing_steps()
+    return phases
 
 
 def create_empty_manifest(task_id: str, topic: str = "") -> TaskManifest:
@@ -153,10 +173,66 @@ def manifest_to_dict(m: TaskManifest) -> dict:
 
 def dict_to_manifest(d: dict) -> Optional[TaskManifest]:
     try:
-        return TaskManifest(**d)
+        manifest = TaskManifest.model_validate(d)
+        phases = d.get("phases", {})
+        paper_phase = phases.get(TaskPhase.PAPER_PARSING.value) if isinstance(phases, dict) else None
+        if isinstance(paper_phase, dict) and "paper_processing_steps" in paper_phase:
+            manifest.phases[TaskPhase.PAPER_PARSING.value].paper_processing_steps = (
+                validate_paper_processing_steps(paper_phase["paper_processing_steps"])
+            )
+        return manifest
     except Exception as e:
         logger.warning(f"Failed to parse manifest: {e}")
         return None
+
+
+def validate_paper_processing_steps(
+    steps: Any,
+) -> dict[str, PaperProcessingStepEntry]:
+    if not isinstance(steps, dict):
+        raise ValueError("Invalid paper_processing_steps: expected a dict")
+
+    restored: dict[str, PaperProcessingStepEntry] = {}
+    for name, step_data in steps.items():
+        if name not in PAPER_PROCESSING_SUBSTEPS:
+            allowed = ", ".join(PAPER_PROCESSING_SUBSTEPS)
+            raise ValueError(
+                f"Unknown paper processing substep {name!r}; expected one of: {allowed}"
+            )
+        if isinstance(step_data, PaperProcessingStepEntry):
+            restored[name] = step_data
+            continue
+        if not isinstance(step_data, dict):
+            raise ValueError(f"Invalid paper processing step {name!r}: expected a dict")
+        try:
+            restored[name] = PaperProcessingStepEntry.model_validate(step_data)
+        except Exception as exc:
+            raise ValueError(f"Invalid paper processing step {name!r}: {exc}") from exc
+    return restored
+
+
+def dict_to_manifest_strict(d: Any, source: Optional[Path] = None) -> TaskManifest:
+    location = f": {source}" if source is not None else ""
+    if not isinstance(d, dict):
+        raise ValueError(f"Invalid Manifest JSON structure{location}")
+    try:
+        manifest = TaskManifest.model_validate(d)
+    except Exception as exc:
+        raise ValueError(f"Invalid Manifest structure{location}: {exc}") from exc
+
+    paper_phase = manifest.phases.get(TaskPhase.PAPER_PARSING.value)
+    if paper_phase is not None:
+        paper_phase.paper_processing_steps = validate_paper_processing_steps(
+            paper_phase.paper_processing_steps
+        )
+    return manifest
+
+
+def load_manifest_strict(path: Path) -> Optional[TaskManifest]:
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return dict_to_manifest_strict(json.load(f), source=path)
 
 
 def dict_to_index(d: dict) -> Optional[TasksIndex]:
@@ -224,6 +300,9 @@ def scan_artifacts_for_files(task_dir: Path) -> list[FileEntry]:
 
 
 def rebuild_manifest_from_state(task_dir: Path, task_id: str, state_data: dict) -> TaskManifest:
+    if not isinstance(state_data, dict):
+        raise ValueError("Invalid task state JSON: expected a dict")
+
     topic = ""
     spec = state_data.get("metadata", {}).get("research_spec", {})
     if spec:
@@ -247,6 +326,11 @@ def rebuild_manifest_from_state(task_dir: Path, task_id: str, state_data: dict) 
             m.phases[pname].score = card.get("score")
             m.phases[pname].verdict = card.get("verdict")
             m.phases[pname].summary = artifact_filename(pname, "summary") if pname else None
+
+    if "paper_processing_steps" in state_data:
+        m.phases[TaskPhase.PAPER_PARSING.value].paper_processing_steps = (
+            validate_paper_processing_steps(state_data["paper_processing_steps"])
+        )
 
     m.files = scan_artifacts_for_files(task_dir)
 

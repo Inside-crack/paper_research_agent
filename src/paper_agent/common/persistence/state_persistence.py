@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,13 @@ from ..models.base import EvaluationVerdict, TaskPhase
 from ..models.evaluation_result import EvaluationResult
 from ..models.execution_plan import ExecutionPlan
 from ..models.research_spec import ResearchSpec
-from ..models.task_state import TaskState
+from ..models.paper_artifact import PaperArtifact
+from ..models.task_state import (
+    PAPER_PROCESSING_SUBSTEPS,
+    PaperProcessingStepState,
+    TaskState,
+    default_paper_processing_steps,
+)
 from .error_context import (
     ErrorContext,
     PhaseCompletionRecord,
@@ -33,6 +40,7 @@ from .manifest import (
     TasksIndex,
     TaskIndexEntry,
     PhaseEntry,
+    PaperProcessingStepEntry,
     StepSummary,
     FileEntry,
     atomic_write_json,
@@ -43,6 +51,8 @@ from .manifest import (
     manifest_to_dict,
     manifest_to_index_entry,
     rebuild_manifest_from_state,
+    load_manifest_strict,
+    validate_paper_processing_steps,
     _now_iso,
 )
 from .naming import artifact_filename, phase_short
@@ -52,8 +62,7 @@ logger = get_logger(__name__)
 
 class StatePersistence:
     def __init__(self, base_dir: Optional[Path] = None):
-        settings = get_settings()
-        self.base_dir = base_dir or settings.artifact_dir
+        self.base_dir = base_dir if base_dir is not None else get_settings().artifact_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_task_dir(self, task_id: str) -> Path:
@@ -73,8 +82,40 @@ class StatePersistence:
     def _save_json(self, path: Path, data: Any) -> None:
         atomic_write_json(path, data)
 
+    def _save_bytes_atomically(self, path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise
+
     def _load_json(self, path: Path) -> Any:
         return load_json(path)
+
+    def _load_json_strict(self, path: Path) -> Any:
+        if not path.exists():
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _restore_file(self, path: Path, content: Optional[bytes]) -> None:
+        if content is None:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return
+        self._save_bytes_atomically(path, content)
 
     async def save_research_spec(self, spec: ResearchSpec) -> Path:
         task_dir = self._get_task_dir(spec.id)
@@ -103,11 +144,12 @@ class StatePersistence:
 
     def _update_manifest(self, task_id: str, updater: Callable[[TaskManifest], None]) -> TaskManifest:
         path = self._get_manifest_path(task_id)
-        data = load_json(path)
-        m = dict_to_manifest(data) if data else None
+        m = load_manifest_strict(path)
         if m is None:
             state_path = self._get_task_dir(task_id) / "task_state.json"
-            state_data = load_json(state_path)
+            state_data = self._load_json_strict(state_path)
+            if state_path.exists() and not isinstance(state_data, dict):
+                raise ValueError(f"Invalid task state JSON: {state_path}")
             topic = ""
             if state_data:
                 spec = state_data.get("metadata", {}).get("research_spec", {})
@@ -120,6 +162,157 @@ class StatePersistence:
         m.updated_at = _now_iso()
         self._save_json(path, manifest_to_dict(m))
         return m
+
+    @staticmethod
+    def _validate_paper_processing_substep(substep: str) -> None:
+        if substep not in PAPER_PROCESSING_SUBSTEPS:
+            allowed = ", ".join(PAPER_PROCESSING_SUBSTEPS)
+            raise ValueError(f"Unknown paper processing substep {substep!r}; expected one of: {allowed}")
+
+    @classmethod
+    def _validate_paper_processing_step_names(cls, steps: Any) -> None:
+        if not isinstance(steps, dict):
+            raise ValueError("Invalid paper_processing_steps: expected a dict")
+        for name in steps:
+            cls._validate_paper_processing_substep(name)
+
+    def load_paper_processing_steps(self, task_id: str) -> dict[str, PaperProcessingStepState]:
+        """Load persisted paper substep state, falling back to the Manifest."""
+        task_dir = self._get_task_dir(task_id)
+        state_path = task_dir / "task_state.json"
+        manifest = load_manifest_strict(task_dir / MANIFEST_FILENAME)
+        if state_path.exists():
+            state_data = self._load_json_strict(state_path)
+            if not isinstance(state_data, dict):
+                raise ValueError(f"Invalid task state JSON: {state_path}")
+            state = TaskState(**state_data)
+            self._validate_paper_processing_step_names(state.paper_processing_steps)
+            return state.paper_processing_steps
+
+        if manifest is None:
+            return default_paper_processing_steps()
+
+        entries = manifest.phases.get(TaskPhase.PAPER_PARSING.value)
+        if entries is None:
+            return default_paper_processing_steps()
+        entries.paper_processing_steps = validate_paper_processing_steps(
+            entries.paper_processing_steps
+        )
+        return {
+            name: PaperProcessingStepState.model_validate(entry.model_dump(mode="json"))
+            for name, entry in entries.paper_processing_steps.items()
+        }
+
+    def _build_minimal_task_state(
+        self,
+        task_id: str,
+        task_dir: Path,
+        manifest: Optional[TaskManifest],
+    ) -> TaskState:
+        research_spec_id = task_id
+        metadata: dict[str, Any] = {}
+        spec_path = task_dir / "research_spec.json"
+        if spec_path.exists():
+            spec_data = self._load_json_strict(spec_path)
+            if not isinstance(spec_data, dict):
+                raise ValueError(f"Invalid research spec JSON: {spec_path}")
+            metadata["research_spec"] = spec_data
+            research_spec_id = spec_data.get("id") or task_id
+        elif manifest is not None and manifest.topic:
+            metadata["research_spec"] = {"user_query": manifest.topic}
+
+        paper_processing_steps = default_paper_processing_steps()
+        if manifest is not None:
+            phase = manifest.phases.get(TaskPhase.PAPER_PARSING.value)
+            if phase is not None:
+                entries = validate_paper_processing_steps(phase.paper_processing_steps)
+                for name, entry in entries.items():
+                    paper_processing_steps[name] = PaperProcessingStepState.model_validate(
+                        entry.model_dump(mode="json")
+                    )
+
+        return TaskState(
+            id=task_id,
+            research_spec_id=research_spec_id,
+            current_phase=TaskPhase.PAPER_PARSING,
+            paper_processing_steps=paper_processing_steps,
+            metadata=metadata,
+            artifact_dir=str(task_dir),
+        )
+
+    async def update_paper_processing_step(
+        self,
+        task_id: str,
+        substep: str,
+        step_state: PaperProcessingStepState,
+    ) -> PaperProcessingStepState:
+        """Persist one PAPER_PARSING substep in state and its Manifest entry."""
+        self._validate_paper_processing_substep(substep)
+        if not isinstance(step_state, PaperProcessingStepState):
+            raise TypeError("step_state must be a PaperProcessingStepState")
+
+        task_dir = self._get_task_dir(task_id)
+        state_path = task_dir / "task_state.json"
+        previous_state = state_path.read_bytes() if state_path.exists() else None
+        manifest_path = task_dir / MANIFEST_FILENAME
+        previous_manifest = manifest_path.read_bytes() if manifest_path.exists() else None
+        try:
+            manifest = load_manifest_strict(manifest_path)
+            if previous_state is not None:
+                state_data = self._load_json_strict(state_path)
+                if not isinstance(state_data, dict):
+                    raise ValueError(f"Invalid task state JSON: {state_path}")
+                state = TaskState(**state_data)
+                self._validate_paper_processing_step_names(state.paper_processing_steps)
+            else:
+                state = self._build_minimal_task_state(task_id, task_dir, manifest)
+            state.current_phase = TaskPhase.PAPER_PARSING
+            state.paper_processing_steps[substep] = step_state
+            self._save_json(state_path, self._serialize_model(state))
+
+            def _upd(m: TaskManifest):
+                phase_name = TaskPhase.PAPER_PARSING.value
+                if phase_name not in m.phases:
+                    m.phases[phase_name] = PhaseEntry()
+                m.phases[phase_name].paper_processing_steps[substep] = PaperProcessingStepEntry(
+                    **step_state.model_dump(mode="json")
+                )
+                m.current_phase = phase_name
+
+            self._update_manifest(task_id, _upd)
+            await self.update_tasks_index(task_id, strict=True)
+            return step_state
+        except Exception as original_error:
+            rollback_errors = []
+            for path, content in (
+                (state_path, previous_state),
+                (manifest_path, previous_manifest),
+            ):
+                try:
+                    self._restore_file(path, content)
+                except Exception as rollback_error:
+                    rollback_errors.append((path, rollback_error))
+                    logger.error(f"Failed to roll back {path}: {rollback_error}")
+            try:
+                rollback_index = self._rebuild_tasks_index_without_creating_manifests()
+                self._save_json(
+                    self._get_index_path(),
+                    rollback_index.model_dump(mode="json"),
+                )
+            except Exception as rollback_error:
+                rollback_errors.append((self._get_index_path(), rollback_error))
+                logger.error(
+                    f"Failed to rebuild tasks index during rollback: {rollback_error}"
+                )
+            if rollback_errors:
+                details = "; ".join(
+                    f"{path}: {rollback_error}" for path, rollback_error in rollback_errors
+                )
+                raise RuntimeError(
+                    f"Persistence operation failed with original error {original_error!r}; "
+                    f"rollback failure(s): {details}"
+                ) from original_error
+            raise
 
     def _add_file_entry(self, m: TaskManifest, name: str, file_type: str,
                         phase: Optional[str] = None, step_id: Optional[str] = None) -> None:
@@ -191,6 +384,88 @@ class StatePersistence:
         self._update_manifest(task_id, _upd)
         await self.update_tasks_index(task_id)
         return path
+
+    async def save_paper_artifact(
+        self,
+        task_id: str,
+        artifact: PaperArtifact,
+        pdf_bytes: bytes,
+        pdf_relative_path: str,
+    ) -> tuple[Path, Path]:
+        """Persist a validated paper PDF and its structured metadata together."""
+        pdf_path = self._get_task_dir(task_id) / pdf_relative_path
+        artifact_path = pdf_path.with_suffix(".json")
+        written_paths: list[Path] = []
+
+        try:
+            self._save_bytes_atomically(pdf_path, pdf_bytes)
+            written_paths.append(pdf_path)
+            self._save_json(artifact_path, self._serialize_model(artifact))
+            written_paths.append(artifact_path)
+
+            def _upd(m: TaskManifest):
+                phase_name = TaskPhase.PAPER_PARSING.value
+                if phase_name not in m.phases:
+                    m.phases[phase_name] = PhaseEntry()
+                m.phases[phase_name].artifacts.output = artifact_path.relative_to(
+                    self._get_task_dir(task_id)
+                ).as_posix()
+                self._add_file_entry(
+                    m,
+                    pdf_path.relative_to(self._get_task_dir(task_id)).as_posix(),
+                    "paper_pdf",
+                    phase_name,
+                )
+                self._add_file_entry(
+                    m,
+                    artifact_path.relative_to(self._get_task_dir(task_id)).as_posix(),
+                    "paper_artifact",
+                    phase_name,
+                )
+
+            self._update_manifest(task_id, _upd)
+            await self.update_tasks_index(task_id)
+            return pdf_path, artifact_path
+        except Exception:
+            for path in written_paths:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            raise
+
+    async def update_paper_artifact(
+        self,
+        task_id: str,
+        artifact_path: str,
+        artifact: PaperArtifact,
+    ) -> Path:
+        relative_path = Path(artifact_path)
+        task_dir = self._get_task_dir(task_id)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"Invalid paper artifact path: {artifact_path}")
+
+        path = task_dir / relative_path
+        if not path.exists():
+            raise FileNotFoundError(f"Paper artifact not found: {artifact_path}")
+
+        previous_content = path.read_bytes()
+        try:
+            self._save_json(path, self._serialize_model(artifact))
+
+            def _upd(m: TaskManifest):
+                phase_name = TaskPhase.PAPER_PARSING.value
+                if phase_name not in m.phases:
+                    m.phases[phase_name] = PhaseEntry()
+                m.phases[phase_name].artifacts.output = relative_path.as_posix()
+                self._add_file_entry(m, relative_path.as_posix(), "paper_artifact", phase_name)
+
+            self._update_manifest(task_id, _upd)
+            await self.update_tasks_index(task_id)
+            return path
+        except Exception:
+            self._save_bytes_atomically(path, previous_content)
+            raise
 
     async def save_phase_eval(self, task_id: str, phase: TaskPhase, verdict: EvaluationVerdict,
                                eval_result: EvaluationResult) -> Path:
@@ -310,10 +585,12 @@ class StatePersistence:
         await self.update_tasks_index(task_id)
         return m
 
-    async def update_tasks_index(self, task_id: Optional[str] = None) -> None:
+    async def update_tasks_index(self, task_id: Optional[str] = None, *, strict: bool = False) -> None:
         try:
             self._do_update_tasks_index(task_id)
         except Exception as e:
+            if strict:
+                raise
             logger.warning(f"Failed to update tasks index: {e} (non-critical)")
 
     def _do_update_tasks_index(self, task_id: Optional[str]) -> None:
@@ -366,6 +643,26 @@ class StatePersistence:
                         tasks.append(manifest_to_index_entry(m))
                 except Exception as e:
                     logger.warning(f"Skipping task {tid} during index rebuild: {e}")
+        tasks.sort(key=lambda t: t.updated_at or "", reverse=True)
+        return TasksIndex(updated_at=_now_iso(), tasks=tasks)
+
+    def _rebuild_tasks_index_without_creating_manifests(self) -> TasksIndex:
+        tasks = []
+        if self.base_dir.exists():
+            for child in sorted(self.base_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                manifest_path = child / MANIFEST_FILENAME
+                if not manifest_path.exists():
+                    continue
+                try:
+                    manifest = load_manifest_strict(manifest_path)
+                    if manifest is not None:
+                        tasks.append(manifest_to_index_entry(manifest))
+                except Exception as e:
+                    logger.warning(
+                        f"Skipping task {child.name} during rollback index rebuild: {e}"
+                    )
         tasks.sort(key=lambda t: t.updated_at or "", reverse=True)
         return TasksIndex(updated_at=_now_iso(), tasks=tasks)
 

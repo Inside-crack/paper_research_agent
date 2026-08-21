@@ -49,6 +49,7 @@ class PaperArtifact(BaseModelWithId):
     contributions: list[str] = Field(default_factory=list)
     conclusions: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    summary_evidence: dict[str, list[str]] = Field(default_factory=dict)
 
     full_text_original: str = ""
     full_text_translated: str = ""
