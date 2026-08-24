@@ -12,8 +12,9 @@
 
 ## 验收标准
 
-- [ ] P30 T2 流程通过 Workflow 执行。
-- [ ] Orchestrator 不再包含论文业务细节分支。
-- [ ] Workflow 可单独测试和恢复。
-- [ ] 已通过子步骤不重复执行。
-- [ ] Workflow 失败不会伪造成功产物。
+- [x] P30 T2 流程通过 Workflow 执行。
+- [x] Orchestrator 不再包含论文业务细节分支。
+- [x] Orchestrator 通过可注入的 `PaperProcessingWorkflow` 边界调用论文流程。
+- [x] Workflow 可单独测试和恢复。
+- [x] 已通过子步骤不重复执行。
+- [x] Workflow 失败不会伪造成功产物。
