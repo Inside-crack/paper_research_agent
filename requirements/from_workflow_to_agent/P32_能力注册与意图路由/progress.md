@@ -1,7 +1,7 @@
 # P32 进度
 
-**状态**：T32-0 能力封装已完成  
-**完成度**：T32-0.1 至 T32-0.6 六个确定能力 Adapter 已完成
+**状态**：P32 能力注册与意图路由已完成
+**完成度**：T32-0 至 T32-4.10、T32-4.11a/b/c/d 已实现并通过专项测试
 
 - [x] T32-0：Capability/CapabilityResult/ExecutionContext 最小契约
 - [x] T32-0.1：`paper_search` Adapter（`arxiv_search` + `arxiv_get_paper`）
@@ -19,13 +19,13 @@
 - [x] T32-0：六个 Adapter 输入/输出和错误传播测试
 - [x] T32-1：最小 CapabilityRegistry（注册、解析、启用状态）
 - [x] T32-1：六个确定能力统一注册入口
-- [ ] Preconditions
+- [x] T32-2：Preconditions 与上下文参数归一化
 - [x] T32-3：六个确定能力的确定性路由骨架
 - [x] T32-3：路由参数缺失、能力禁用和不支持意图测试
 - [x] P31 Session 集成到 ConversationService
 - [x] Intent Schema 扩展 capability-specific arguments
 - [x] Router 参数缺失和确定性规则基础覆盖
-- [ ] LLM Router JSON Schema 失败处理
+- [x] T32-4：LLM Router JSON Schema 失败处理
 - [x] 最小 Chat 闭环测试
 
 ## T32-4 复杂意图识别与路由
@@ -49,7 +49,14 @@
 - [x] T32-4.7：混合路由策略
 - [x] T32-4.7：确定性优先、缺参不回退、模糊意图委托和 Provider 失败边界测试
 - [x] T32-4.7：ConversationService 接入 HybridIntentRouter 和上下文投影
-- [ ] T32-4.8：澄清与低置信度策略
-- [ ] T32-4.9：Workflow 意图映射
-- [ ] T32-4.10：安全与执行边界
-- [ ] T32-4.11：评测与可观测性
+- [x] T32-4.8：澄清与低置信度策略
+- [x] T32-4.8：低置信度、缺参、能力不可用、上下文冲突和未知意图测试
+- [x] T32-4.9：process_selected_paper Workflow 能力注册与确定性路由
+- [x] T32-4.9：Workflow 元数据、前置条件和未配置执行器的阻断测试
+- [x] T32-4.10：安全与执行边界
+- [x] T32-4.10：能力白名单、Schema、确认状态和路径边界测试
+- [x] T32-4.11：评测与可观测性（T32-4.11a/b/c/d 已完成）
+- [x] T32-4.11：路由事件、内存观测器、正负向评测和决策原因测试
+- [x] T32-4.11b：路由决策事件持久化与重新加载
+- [x] T32-4.11c：评测报告持久化与查询
+- [x] T32-4.11d：历史指标统计与跨批次对比

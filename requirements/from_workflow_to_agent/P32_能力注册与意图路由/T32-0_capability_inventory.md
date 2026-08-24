@@ -336,10 +336,10 @@ artifact_refs:
 - [x] `paper_download` Adapter 有独立类、任务边界校验和 artifact 引用输出；
 - [x] 6 个 Capability Adapter 均有独立类和统一入口；
 - [x] 每个 Adapter 通过 `ToolRegistry` 调用底层 Tool；
-- [ ] `task_id` 从 `ExecutionContext` 注入；
-- [ ] 所有相对路径经过任务边界校验；
+- [x] `task_id` 从 `ExecutionContext` 注入；
+- [x] 所有相对路径经过任务边界校验；
 - [x] 底层 Tool 失败原样转为失败的 `CapabilityResult`；
 - [x] 成功输出包含必要的 artifact 引用；
-- [ ] 不存在的 `paper_select` 不被注册为虚假 Tool；
+- [x] 不存在的 `paper_select` 不被注册为虚假 Tool；
 - [x] 每个 Adapter 具备正向和负向测试；
 - [ ] P10-P14 原有测试全部回归通过。

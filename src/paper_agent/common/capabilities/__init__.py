@@ -9,6 +9,27 @@ from .context_projection import (
     IntentContextProjector,
     ProjectedConversationMessage,
 )
+from .clarification import (
+    ClarificationPolicy,
+    ClarificationPolicyConfig,
+    ClarificationResult,
+)
+from .security import (
+    CapabilityExecutionSecurityPolicy,
+    SecurityDecision,
+)
+from .observability import (
+    InMemoryRoutingObserver,
+    PersistentRoutingObserver,
+    RoutingDecisionEvent,
+    RoutingObserver,
+)
+from .evaluation import (
+    RoutingEvaluationCase,
+    RoutingEvaluationItem,
+    RoutingEvaluationReport,
+    evaluate_router,
+)
 from .decision_validator import (
     CapabilityDecisionValidationError,
     CapabilityDecisionValidator,
@@ -20,6 +41,10 @@ from .paper_parse import PaperParseAdapter
 from .paper_glossary import PaperGlossaryAdapter
 from .paper_translate import PaperTranslateAdapter
 from .paper_summary import PaperSummaryAdapter
+from .paper_processing_workflow import (
+    PaperProcessingWorkflowAdapter,
+    PaperProcessingWorkflowRunner,
+)
 from .registry import (
     CapabilityRegistry,
     CapabilitySpec,
@@ -46,6 +71,19 @@ __all__ = [
     "IntentContextProjection",
     "IntentContextProjector",
     "ProjectedConversationMessage",
+    "ClarificationPolicy",
+    "ClarificationPolicyConfig",
+    "ClarificationResult",
+    "CapabilityExecutionSecurityPolicy",
+    "SecurityDecision",
+    "InMemoryRoutingObserver",
+    "PersistentRoutingObserver",
+    "RoutingDecisionEvent",
+    "RoutingObserver",
+    "RoutingEvaluationCase",
+    "RoutingEvaluationItem",
+    "RoutingEvaluationReport",
+    "evaluate_router",
     "CapabilityDecisionValidationError",
     "CapabilityDecisionValidator",
     "IntentPreconditionResolver",
@@ -56,6 +94,8 @@ __all__ = [
     "PaperGlossaryAdapter",
     "PaperTranslateAdapter",
     "PaperSummaryAdapter",
+    "PaperProcessingWorkflowAdapter",
+    "PaperProcessingWorkflowRunner",
     "CapabilityRegistry",
     "CapabilitySpec",
     "register_default_capabilities",

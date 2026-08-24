@@ -172,5 +172,26 @@ def test_llm_failure_is_not_silently_converted_to_success():
         )
 
 
+def test_hybrid_router_applies_low_confidence_clarification_policy():
+    low_confidence = IntentDecision(
+        matched=True,
+        intent="download_paper",
+        capability_name="paper_download",
+        confidence=0.2,
+        source="llm",
+    )
+    provider = FakeLLMRouter(low_confidence)
+    hybrid = HybridIntentRouter(deterministic("paper_search"), provider)
+    message, projection = projection_for("帮我处理刚才那篇")
+
+    decision = asyncio.run(
+        hybrid.route(message, ConversationContext(), projection)
+    )
+
+    assert decision.matched is False
+    assert decision.source == "fallback"
+    assert decision.clarification_question
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])

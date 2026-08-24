@@ -6,7 +6,10 @@ from .capabilities import (
     CapabilityRegistry,
     ExecutionContext,
     HybridIntentRouter,
+    CapabilityExecutionSecurityPolicy,
+    CapabilityCatalog,
     IntentContextProjector,
+    PersistentRoutingObserver,
 )
 from .capabilities.router import DeterministicIntentRouter
 from .capabilities.hybrid_router import LLMDecisionRouter
@@ -27,11 +30,14 @@ class ConversationService:
     ):
         self.store = store
         self.registry = registry
+        self.security_policy = CapabilityExecutionSecurityPolicy(
+            CapabilityCatalog.from_registry(registry)
+        )
         self.deterministic_router = DeterministicIntentRouter(registry)
-        self.router = (
-            HybridIntentRouter(self.deterministic_router, llm_router)
-            if llm_router is not None
-            else self.deterministic_router
+        self.router = HybridIntentRouter(
+            self.deterministic_router,
+            llm_router,
+            observer=PersistentRoutingObserver(store.base_dir),
         )
         self.context_projector = IntentContextProjector()
 
@@ -46,18 +52,15 @@ class ConversationService:
         if session is None:
             raise FileNotFoundError(f"Conversation session does not exist: {session_id}")
 
-        if isinstance(self.router, HybridIntentRouter):
-            projection = self.context_projector.project(
-                session,
-                self.store.list_messages(session_id),
-            )
-            decision = await self.router.route(
-                user_message,
-                session.context,
-                projection,
-            )
-        else:
-            decision = self.router.route(user_message, session.context)
+        projection = self.context_projector.project(
+            session,
+            self.store.list_messages(session_id),
+        )
+        decision = await self.router.route(
+            user_message,
+            session.context,
+            projection,
+        )
         if not decision.matched:
             reply = decision.clarification_question or "暂时无法理解这个请求。"
             self.store.append_message(
@@ -77,6 +80,33 @@ class ConversationService:
             }
 
         capability = self.registry.resolve(decision.capability_name)
+        authorization = self.security_policy.authorize(decision)
+        if not authorization.allowed:
+            if authorization.requires_confirmation:
+                reply = "该操作将启动完整论文处理流程，请确认后继续。"
+                status = "waiting_confirmation"
+            else:
+                reply = f"该操作未被允许执行：{authorization.reason}"
+                status = "blocked"
+            self.store.append_message(
+                session_id,
+                ConversationMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=reply,
+                    metadata={
+                        "decision": decision.model_dump(),
+                        "security": authorization.model_dump(),
+                    },
+                ),
+            )
+            return {
+                "session_id": session_id,
+                "status": status,
+                "reply": reply,
+                "decision": decision.model_dump(),
+                "security": authorization.model_dump(),
+            }
         result = await capability.adapter.execute(
             ExecutionContext(
                 session_id=session_id,

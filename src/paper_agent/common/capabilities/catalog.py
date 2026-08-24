@@ -195,6 +195,28 @@ DEFAULT_CAPABILITY_METADATA: dict[str, dict[str, Any]] = {
         "confirmation_required": False,
         "allowed_intents": ["summarize_paper"],
     },
+    "process_selected_paper": {
+        "execution_kind": "workflow",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selected_sections": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "translation_language": {"type": "string", "minLength": 2},
+            },
+            "additionalProperties": False,
+        },
+        "required_arguments": [],
+        "preconditions": [
+            "ExecutionContext.task_id exists",
+            "ExecutionContext.selected_paper exists",
+            "paper processing workflow runner is registered",
+        ],
+        "confirmation_required": True,
+        "allowed_intents": ["process_selected_paper"],
+    },
 }
 
 

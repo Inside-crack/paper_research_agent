@@ -9,6 +9,7 @@ from paper_agent.common.capabilities import (
     CapabilityRegistry,
     IntentDecision,
     PaperSearchAdapter,
+    PersistentRoutingObserver,
 )
 from paper_agent.common.conversation_service import ConversationService
 from paper_agent.common.models.conversation import ConversationMessage
@@ -82,6 +83,11 @@ def test_conversation_service_uses_deterministic_route_without_llm():
         assert response["decision"]["source"] == "deterministic"
         assert llm_router.calls == []
         assert tools.calls
+        events = PersistentRoutingObserver(store.base_dir).list_events()
+        assert len(events) == 1
+        assert events[0].session_id == session.session_id
+        assert events[0].message_id
+        assert events[0].capability_name == "paper_search"
 
 
 def test_conversation_service_projects_context_before_llm_route():
@@ -103,6 +109,9 @@ def test_conversation_service_projects_context_before_llm_route():
         assert len(projection.recent_messages) == 1
         assert projection.recent_messages[0].content == routed_message.content
         assert len(store.list_messages(session.session_id)) == 2
+        events = PersistentRoutingObserver(store.base_dir).list_events()
+        assert len(events) == 1
+        assert events[0].source == "fallback"
 
 
 if __name__ == "__main__":

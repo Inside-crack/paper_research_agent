@@ -29,7 +29,7 @@ class DummyAdapter(CapabilityAdapter):
         return CapabilityResult.succeeded(data=arguments)
 
 
-def test_default_catalog_contains_six_allowlisted_capabilities():
+def test_default_catalog_contains_six_tools_and_one_workflow():
     registry = register_default_capabilities(CapabilityRegistry(), object())
     catalog = CapabilityCatalog.from_registry(registry)
 
@@ -40,6 +40,7 @@ def test_default_catalog_contains_six_allowlisted_capabilities():
         "paper_glossary",
         "paper_translate",
         "paper_summary",
+        "process_selected_paper",
     ]
 
 
@@ -54,6 +55,17 @@ def test_catalog_exposes_routing_metadata_without_adapter_details():
     assert parse.preconditions
     assert parse.allowed_intents == ["parse_paper"]
     assert "adapter" not in parse.model_dump()
+
+
+def test_process_selected_paper_is_allowlisted_as_workflow():
+    registry = register_default_capabilities(CapabilityRegistry(), object())
+    workflow = CapabilityCatalog.from_registry(registry).resolve(
+        "process_selected_paper"
+    )
+
+    assert workflow.execution_kind == "workflow"
+    assert workflow.confirmation_required is True
+    assert workflow.allowed_intents == ["process_selected_paper"]
 
 
 def test_catalog_excludes_disabled_capabilities():
