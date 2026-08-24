@@ -44,7 +44,7 @@ class HybridIntentRouter:
         started = time.monotonic()
         deterministic = self.deterministic_router.route(message, context)
         if self._deterministic_handled(deterministic):
-            return self._finalize(deterministic, started, message)
+            return self._finalize(deterministic, started, message, context)
 
         if self.llm_router is None or projection is None:
             return self._finalize(
@@ -53,22 +53,25 @@ class HybridIntentRouter:
                 ),
                 started,
                 message,
+                context,
             )
 
         llm_decision = await self.llm_router.route(message, projection)
-        return self._finalize(llm_decision, started, message)
+        return self._finalize(llm_decision, started, message, context)
 
     def _finalize(
         self,
         decision: IntentDecision,
         started: float,
         message: ConversationMessage,
+        context: ConversationContext,
     ) -> IntentDecision:
         resolved = self.clarification_policy.evaluate(decision).decision
         if self.observer is not None:
             event = RoutingDecisionEvent.from_decision(
                 resolved,
                 session_id=message.session_id,
+                task_id=message.task_id or context.active_task_id,
                 message_id=message.message_id,
                 duration_ms=int((time.monotonic() - started) * 1000),
             )

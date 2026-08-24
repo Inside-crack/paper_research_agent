@@ -22,7 +22,8 @@ T32-0 最小执行契约 + 已有 Tool 的 Capability Adapter 封装
 
 [T32-4_complex_intent_routing.md](T32-4_complex_intent_routing.md)
 
-当前 T32-0 至 T32-4.11 均已实现；P33 负责后续 Workflow 生命周期与执行编排。
+当前 T32-0 至 T32-4.10、T32-4.11a/b/c 已实现；T32-4.11d
+（历史指标统计与对比）待实现，P33 负责后续 Workflow 生命周期与执行编排。
 
 T32-0 的详细能力清单见：
 

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import inspect
+import uuid
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from typing import Optional, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..models.conversation import ConversationContext, ConversationMessage
 from .intent_schema import IntentDecision
+
+if TYPE_CHECKING:
+    from ..persistence.routing_evaluation import RoutingEvaluationReportStore
 
 
 class RouterForEvaluation(Protocol):
@@ -42,6 +48,9 @@ class RoutingEvaluationItem(BaseModel):
 class RoutingEvaluationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    report_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    suite_name: str = "default"
     total: int
     passed: int
     failed: int
@@ -54,6 +63,8 @@ async def evaluate_router(
     cases: list[RoutingEvaluationCase],
     *,
     context: Optional[ConversationContext] = None,
+    report_store: Optional["RoutingEvaluationReportStore"] = None,
+    suite_name: str = "default",
 ) -> RoutingEvaluationReport:
     items: list[RoutingEvaluationItem] = []
     shared_context = context or ConversationContext()
@@ -94,10 +105,14 @@ async def evaluate_router(
         )
     total = len(items)
     passed = sum(item.passed for item in items)
-    return RoutingEvaluationReport(
+    report = RoutingEvaluationReport(
+        suite_name=suite_name,
         total=total,
         passed=passed,
         failed=total - passed,
         accuracy=(passed / total) if total else 1.0,
         items=items,
     )
+    if report_store is not None:
+        report_store.save(report)
+    return report

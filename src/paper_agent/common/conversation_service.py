@@ -9,6 +9,7 @@ from .capabilities import (
     CapabilityExecutionSecurityPolicy,
     CapabilityCatalog,
     IntentContextProjector,
+    PersistentRoutingObserver,
 )
 from .capabilities.router import DeterministicIntentRouter
 from .capabilities.hybrid_router import LLMDecisionRouter
@@ -33,10 +34,10 @@ class ConversationService:
             CapabilityCatalog.from_registry(registry)
         )
         self.deterministic_router = DeterministicIntentRouter(registry)
-        self.router = (
-            HybridIntentRouter(self.deterministic_router, llm_router)
-            if llm_router is not None
-            else self.deterministic_router
+        self.router = HybridIntentRouter(
+            self.deterministic_router,
+            llm_router,
+            observer=PersistentRoutingObserver(store.base_dir),
         )
         self.context_projector = IntentContextProjector()
 
@@ -51,18 +52,15 @@ class ConversationService:
         if session is None:
             raise FileNotFoundError(f"Conversation session does not exist: {session_id}")
 
-        if isinstance(self.router, HybridIntentRouter):
-            projection = self.context_projector.project(
-                session,
-                self.store.list_messages(session_id),
-            )
-            decision = await self.router.route(
-                user_message,
-                session.context,
-                projection,
-            )
-        else:
-            decision = self.router.route(user_message, session.context)
+        projection = self.context_projector.project(
+            session,
+            self.store.list_messages(session_id),
+        )
+        decision = await self.router.route(
+            user_message,
+            session.context,
+            projection,
+        )
         if not decision.matched:
             reply = decision.clarification_question or "暂时无法理解这个请求。"
             self.store.append_message(

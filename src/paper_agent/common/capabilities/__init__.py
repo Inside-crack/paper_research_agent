@@ -20,6 +20,7 @@ from .security import (
 )
 from .observability import (
     InMemoryRoutingObserver,
+    PersistentRoutingObserver,
     RoutingDecisionEvent,
     RoutingObserver,
 )
@@ -76,6 +77,7 @@ __all__ = [
     "CapabilityExecutionSecurityPolicy",
     "SecurityDecision",
     "InMemoryRoutingObserver",
+    "PersistentRoutingObserver",
     "RoutingDecisionEvent",
     "RoutingObserver",
     "RoutingEvaluationCase",
