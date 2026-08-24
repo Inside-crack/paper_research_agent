@@ -6,6 +6,8 @@ from .capabilities import (
     CapabilityRegistry,
     ExecutionContext,
     HybridIntentRouter,
+    CapabilityExecutionSecurityPolicy,
+    CapabilityCatalog,
     IntentContextProjector,
 )
 from .capabilities.router import DeterministicIntentRouter
@@ -27,6 +29,9 @@ class ConversationService:
     ):
         self.store = store
         self.registry = registry
+        self.security_policy = CapabilityExecutionSecurityPolicy(
+            CapabilityCatalog.from_registry(registry)
+        )
         self.deterministic_router = DeterministicIntentRouter(registry)
         self.router = (
             HybridIntentRouter(self.deterministic_router, llm_router)
@@ -77,6 +82,33 @@ class ConversationService:
             }
 
         capability = self.registry.resolve(decision.capability_name)
+        authorization = self.security_policy.authorize(decision)
+        if not authorization.allowed:
+            if authorization.requires_confirmation:
+                reply = "该操作将启动完整论文处理流程，请确认后继续。"
+                status = "waiting_confirmation"
+            else:
+                reply = f"该操作未被允许执行：{authorization.reason}"
+                status = "blocked"
+            self.store.append_message(
+                session_id,
+                ConversationMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=reply,
+                    metadata={
+                        "decision": decision.model_dump(),
+                        "security": authorization.model_dump(),
+                    },
+                ),
+            )
+            return {
+                "session_id": session_id,
+                "status": status,
+                "reply": reply,
+                "decision": decision.model_dump(),
+                "security": authorization.model_dump(),
+            }
         result = await capability.adapter.execute(
             ExecutionContext(
                 session_id=session_id,

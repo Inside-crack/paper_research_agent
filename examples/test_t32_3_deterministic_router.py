@@ -154,7 +154,7 @@ def test_disabled_capability_cannot_be_routed():
     assert "disabled" in (decision.reason or "")
 
 
-def test_default_registration_exposes_six_capabilities():
+def test_default_registration_exposes_six_tools_and_one_workflow():
     registry = CapabilityRegistry()
     register_default_capabilities(registry, object())
 
@@ -165,6 +165,7 @@ def test_default_registration_exposes_six_capabilities():
         "paper_glossary",
         "paper_translate",
         "paper_summary",
+        "process_selected_paper",
     ]
 
 
@@ -178,5 +179,5 @@ if __name__ == "__main__":
     test_translate_and_summary_report_missing_content_arguments()
     test_unsupported_intent_is_not_matched()
     test_disabled_capability_cannot_be_routed()
-    test_default_registration_exposes_six_capabilities()
+    test_default_registration_exposes_six_tools_and_one_workflow()
     print("10 passed")

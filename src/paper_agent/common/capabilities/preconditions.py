@@ -36,6 +36,7 @@ class IntentPreconditionResolver:
         "paper_glossary",
         "paper_translate",
         "paper_summary",
+        "process_selected_paper",
     }
     _ARTIFACT_BOUND_CAPABILITIES = {
         "paper_parse",
@@ -212,6 +213,11 @@ class IntentPreconditionResolver:
             has_direct_paper = bool(arguments.get("arxiv_id") or arguments.get("pdf_url"))
             if not has_selected and not has_direct_paper:
                 missing.append("selected_paper")
+
+        if capability_name == "process_selected_paper" and not (
+            projection.selected_paper or context_updates.get("selected_paper")
+        ):
+            missing.append("selected_paper")
 
         if capability_name in self._ARTIFACT_BOUND_CAPABILITIES:
             artifact_path = arguments.get("artifact_path")

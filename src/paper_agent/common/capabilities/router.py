@@ -29,6 +29,19 @@ class DeterministicIntentRouter:
     )
     _CAPABILITY_INTENTS = (
         (
+            "process_selected_paper",
+            "process_selected_paper",
+            (
+                "处理这篇论文",
+                "完整处理论文",
+                "处理选中的论文",
+                "process selected paper",
+                "process the paper",
+            ),
+            "请先选择一篇论文，才能启动完整论文处理流程。",
+            ["selected_paper"],
+        ),
+        (
             "paper_download",
             "download_paper",
             ("下载", "download paper", "download the paper", "get the pdf"),
@@ -162,13 +175,18 @@ class DeterministicIntentRouter:
         clarification_question: str,
         required_arguments: list[str],
     ) -> IntentDecision:
+        execution_kind = (
+            "workflow" if capability_name == "process_selected_paper" else "tool"
+        )
         try:
-            self.registry.resolve(capability_name)
+            capability = self.registry.resolve(capability_name)
+            execution_kind = capability.execution_kind
         except (KeyError, RuntimeError) as exc:
             return IntentDecision(
                 matched=False,
                 intent=intent,
                 capability_name=capability_name,
+                execution_kind=execution_kind,
                 reason=str(exc),
                 clarification_question=f"{capability_name} 能力当前不可用。",
             )
@@ -193,6 +211,7 @@ class DeterministicIntentRouter:
                 matched=False,
                 intent=intent,
                 capability_name=capability_name,
+                execution_kind=capability.execution_kind,
                 confidence=0.9,
                 arguments=arguments,
                 missing_arguments=missing_arguments,
@@ -204,6 +223,7 @@ class DeterministicIntentRouter:
             matched=True,
             intent=intent,
             capability_name=capability_name,
+            execution_kind=capability.execution_kind,
             confidence=0.9,
             arguments=arguments,
         )

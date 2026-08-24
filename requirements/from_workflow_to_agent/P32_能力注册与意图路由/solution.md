@@ -22,8 +22,7 @@ T32-0 最小执行契约 + 已有 Tool 的 Capability Adapter 封装
 
 [T32-4_complex_intent_routing.md](T32-4_complex_intent_routing.md)
 
-当前已完成 T32-0 和确定性路由骨架；后续按 T32-4.0 至 T32-4.11
-逐项实现，不直接跳到不可测试的全量 LLM 编排。
+当前 T32-0 至 T32-4.11 均已实现；P33 负责后续 Workflow 生命周期与执行编排。
 
 T32-0 的详细能力清单见：
 
@@ -532,38 +531,38 @@ LLM 输出必须经过 JSON Schema 校验。解析失败时只重试当前 Route
 
 ### Registry
 
-- [ ] 能力可以注册、查询和列出；
-- [ ] 重复注册被拒绝；
-- [ ] disabled 能力不能被解析；
-- [ ] 不存在的能力返回明确错误；
-- [ ] 输入输出 Schema 和执行类型可读取。
+- [x] 能力可以注册、查询和列出；
+- [x] 重复注册被拒绝；
+- [x] disabled 能力不能被解析；
+- [x] 不存在的能力返回明确错误；
+- [x] 输入输出 Schema 和执行类型可读取。
 
 ### Adapter
 
-- [ ] P10-P14 Tool 均有统一 Capability Adapter；
-- [ ] Adapter 能接受统一 `ExecutionContext` 和业务参数；
-- [ ] Tool 错误不会被转换成伪成功；
-- [ ] 输出统一转换为 `CapabilityResult`；
-- [ ] Adapter 不让调用方直接拼接 artifact 绝对路径。
+- [x] P10-P14 Tool 均有统一 Capability Adapter；
+- [x] Adapter 能接受统一 `ExecutionContext` 和业务参数；
+- [x] Tool 错误不会被转换成伪成功；
+- [x] 输出统一转换为 `CapabilityResult`；
+- [x] Adapter 不让调用方直接拼接 artifact 绝对路径。
 
 ### Router
 
-- [ ] 输出严格符合 `IntentDecision`；
-- [ ] 低置信度不返回可执行决策；
-- [ ] 缺少参数时返回澄清信息；
-- [ ] `"翻译第 3 篇方法部分"`在有候选上下文时解析出论文编号和章节范围；
-- [ ] 无候选上下文时返回缺失参数，不猜测论文；
-- [ ] Router 不执行 Tool；
-- [ ] LLM 输出非法时不会启动能力；
-- [ ] 简单论文选择和任务操作支持确定性解析。
+- [x] 输出严格符合 `IntentDecision`；
+- [x] 低置信度不返回可执行决策；
+- [x] 缺少参数时返回澄清信息；
+- [x] `"翻译第 3 篇方法部分"`在有候选上下文时解析出论文编号和章节范围；
+- [x] 无候选上下文时返回缺失参数，不猜测论文；
+- [x] Router 不执行 Tool；
+- [x] LLM 输出非法时不会启动能力；
+- [x] 简单论文选择和任务操作支持确定性解析。
 
 ### Preconditions
 
-- [ ] 缺少论文时不能执行翻译；
-- [ ] 缺少 sections 时不能执行总结；
-- [ ] 缺少 artifact 时返回明确缺失项；
-- [ ] 不扫描文件系统猜测 artifact；
-- [ ] 前置条件结果可以转换为用户可理解的澄清或下一步建议。
+- [x] 缺少论文时不能执行翻译；
+- [x] 缺少 sections 时不能执行总结；
+- [x] 缺少 artifact 时返回明确缺失项；
+- [x] 不扫描文件系统猜测 artifact；
+- [x] 前置条件结果可以转换为用户可理解的澄清或下一步建议。
 
 ## 九、明确不做
 

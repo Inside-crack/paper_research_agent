@@ -80,8 +80,10 @@ class CapabilityRegistry:
 def register_default_capabilities(
     registry: CapabilityRegistry,
     tool_registry: Any,
+    *,
+    workflow_runner: Any = None,
 ) -> CapabilityRegistry:
-    """Register the six paper capabilities without hiding registration policy."""
+    """Register paper Tools and the controlled paper-processing Workflow."""
     from .catalog import metadata_for_capability
     from .paper_download import PaperDownloadAdapter
     from .paper_glossary import PaperGlossaryAdapter
@@ -89,6 +91,7 @@ def register_default_capabilities(
     from .paper_search import PaperSearchAdapter
     from .paper_summary import PaperSummaryAdapter
     from .paper_translate import PaperTranslateAdapter
+    from .paper_processing_workflow import PaperProcessingWorkflowAdapter
 
     adapters = (
         PaperSearchAdapter(tool_registry),
@@ -101,4 +104,9 @@ def register_default_capabilities(
     for adapter in adapters:
         metadata = metadata_for_capability(adapter.name)
         registry.register(adapter, **metadata)
+    workflow = PaperProcessingWorkflowAdapter(workflow_runner)
+    registry.register(
+        workflow,
+        **metadata_for_capability(workflow.name),
+    )
     return registry
