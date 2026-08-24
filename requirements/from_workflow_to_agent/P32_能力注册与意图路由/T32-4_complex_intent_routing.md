@@ -315,6 +315,8 @@ provider_latency
 - `PersistentRoutingObserver`：将脱敏路由决策追加写入
   `routing/decisions.jsonl`，支持重新加载、摘要统计和损坏记录检测；
 - `ConversationService` 已接入持久化 Observer，确定性和 LLM 路由均会记录；
+- `RoutingEvaluationMetrics` 和 `RoutingEvaluationComparison`：对已持久化报告
+  计算准确率、失败率、澄清率、平均置信度，并支持跨报告首末差值对比；
 - 观测异常不会改变路由结果；
 - 事件不包含完整 arguments、Prompt 或模型密钥。
 
@@ -325,7 +327,7 @@ provider_latency
 | T32-4.11a | 内存观测、基础评测和脱敏事件结构 | 已完成 |
 | T32-4.11b | 路由过程事件持久化与重新加载 | 已完成 |
 | T32-4.11c | 评测报告持久化与查询 | 已完成 |
-| T32-4.11d | 历史指标统计与对比 | 待实现 |
+| T32-4.11d | 历史指标统计与对比 | 已完成 |
 
 ## 验收总表
 
@@ -341,4 +343,4 @@ provider_latency
 - [x] 路由决策具备可追踪原因和脱敏日志。
 - [x] 路由决策事件可持久化并在进程重启后重新加载；
 - [x] 评测报告可持久化并查询；
-- [ ] 路由指标支持跨批次历史对比。
+- [x] 路由指标支持跨批次历史对比。
