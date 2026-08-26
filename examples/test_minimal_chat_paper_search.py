@@ -58,18 +58,22 @@ def test_chat_message_routes_to_paper_search_and_persists_context():
         assert response["result"]["success"] is True
         assert len(response["result"]["data"]["candidates"]) == 1
         candidate_set_id = response["result"]["data"]["candidate_set_id"]
+        assert response["result"]["data"]["session_id"] == session.session_id
+        assert response["result"]["data"]["queried_at"]
         candidate_path = (
             Path(temp_dir) / "paper_candidates" / f"{candidate_set_id}.json"
         )
         assert candidate_path.exists()
         persisted_set = store.load_paper_candidate_set(candidate_set_id)
         assert persisted_set is not None
-        assert persisted_set.query_used == "多智能体协作"
+        assert persisted_set.session_id == session.session_id
+        assert persisted_set.queried_at is not None
+        assert persisted_set.query_used == "multi-agent collaboration"
         assert tools.calls == [
             (
                 "arxiv_search",
                 {
-                    "query": "多智能体协作",
+                    "query": "multi-agent collaboration",
                     "max_results": 3,
                     "categories": [],
                 },
@@ -84,6 +88,7 @@ def test_chat_message_routes_to_paper_search_and_persists_context():
         assert restored.context.current_intent == "paper_search"
         assert len(restored.context.candidate_papers) == 1
         assert restored.context.candidate_set_id == candidate_set_id
+        assert restored.context.candidate_queried_at == persisted_set.queried_at
 
 
 def test_unsupported_chat_message_returns_clarification_without_tool_call():

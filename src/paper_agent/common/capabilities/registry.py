@@ -82,6 +82,7 @@ def register_default_capabilities(
     tool_registry: Any,
     *,
     workflow_runner: Any = None,
+    terminology_service: Any = None,
 ) -> CapabilityRegistry:
     """Register paper Tools and the controlled paper-processing Workflow."""
     from .catalog import metadata_for_capability
@@ -94,7 +95,7 @@ def register_default_capabilities(
     from .paper_processing_workflow import PaperProcessingWorkflowAdapter
 
     adapters = (
-        PaperSearchAdapter(tool_registry),
+        PaperSearchAdapter(tool_registry, terminology_service),
         PaperDownloadAdapter(tool_registry),
         PaperParseAdapter(tool_registry),
         PaperGlossaryAdapter(tool_registry),

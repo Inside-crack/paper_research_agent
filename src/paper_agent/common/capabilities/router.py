@@ -6,6 +6,7 @@ from typing import Any
 from ..models.conversation import ConversationContext, ConversationMessage
 from .intent_schema import IntentDecision
 from .registry import CapabilityRegistry
+from .search_query import normalize_search_query
 
 class DeterministicIntentRouter:
     """Route explicit paper-capability requests without an LLM."""
@@ -22,6 +23,10 @@ class DeterministicIntentRouter:
         "papers about",
     )
     _ARXIV_PATTERN = re.compile(r"(?<!\d)(\d{4}\.\d{4,5}(?:v\d+)?)(?!\d)")
+    _ARXIV_URL_PATTERN = re.compile(
+        r"https?://arxiv\.org/(?:abs|pdf)/(?P<identifier>\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?",
+        re.IGNORECASE,
+    )
     _MAX_RESULTS_PATTERN = re.compile(r"(?:前|top|top\s*)?(\d+)\s*(?:篇|papers?)", re.IGNORECASE)
     _ARTIFACT_PATTERN = re.compile(
         r"(?P<path>(?:[\w.-]+/)*[\w.-]+\.json)",
@@ -78,8 +83,14 @@ class DeterministicIntentRouter:
         ),
     )
 
-    def __init__(self, registry: CapabilityRegistry):
+    def __init__(
+        self,
+        registry: CapabilityRegistry,
+        *,
+        normalize_queries: bool = True,
+    ):
         self.registry = registry
+        self.normalize_queries = normalize_queries
 
     def route(
         self,
@@ -142,7 +153,21 @@ class DeterministicIntentRouter:
                     reason="Search query is empty",
                     clarification_question="请补充论文检索主题。",
                 )
-            arguments["query"] = query
+            normalized_query = (
+                normalize_search_query(query)
+                if self.normalize_queries
+                else query.strip()
+            )
+            if not normalized_query:
+                return IntentDecision(
+                    matched=False,
+                    intent="paper_search",
+                    capability_name="paper_search",
+                    missing_arguments=["query"],
+                    reason="Search query is empty after normalization",
+                    clarification_question="请补充论文检索主题。",
+                )
+            arguments["query"] = normalized_query
             if max_match:
                 arguments["max_results"] = int(max_match.group(1))
 
@@ -198,8 +223,17 @@ class DeterministicIntentRouter:
             arguments["artifact_path"] = artifact_match.group("path")
 
         arxiv_match = self._ARXIV_PATTERN.search(content)
+        arxiv_url_match = self._ARXIV_URL_PATTERN.search(content)
         if capability_name == "paper_download" and arxiv_match:
             arguments["arxiv_id"] = arxiv_match.group(1)
+        if capability_name == "process_selected_paper":
+            if arxiv_url_match:
+                arguments["arxiv_id"] = arxiv_url_match.group("identifier")
+                arguments["url"] = arxiv_url_match.group(0)
+                if "/pdf/" in arxiv_url_match.group(0).casefold():
+                    arguments["pdf_url"] = arxiv_url_match.group(0)
+            elif arxiv_match:
+                arguments["arxiv_id"] = arxiv_match.group(1)
 
         missing_arguments = [
             argument

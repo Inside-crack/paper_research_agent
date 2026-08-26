@@ -13,11 +13,14 @@ from .common.capabilities import (
     LLMIntentDecisionRouter,
     LLMIntentRouterProvider,
     register_default_capabilities,
+    LLMTermTranslator,
+    TerminologyService,
 )
-from .common.conversation_service import ConversationService
+from .common.conversation_application_service import ConversationApplicationService
+from .common.events import CliProgressSubscriber
 from .common.llm import create_llm
 from .common.logging import setup_logging
-from .common.persistence import ConversationStore, StatePersistence
+from .common.persistence import ConversationStore, StatePersistence, TerminologyStore
 from .orchestrator import Orchestrator
 from .tools import get_default_registry
 
@@ -33,6 +36,75 @@ def _error(error_code: str, message: str, task_id: str | None = None, exit_code:
         err["task_id"] = task_id
     err.update(extra)
     _json_out(err, exit_code=exit_code)
+
+
+def _build_conversation_service(settings, *, with_llm: bool = True):
+    store = ConversationStore(settings.artifact_dir)
+    capability_registry = CapabilityRegistry()
+    terminology_service = None
+    if with_llm:
+        terminology_store = TerminologyStore(settings.artifact_dir)
+        terminology_service = TerminologyService(
+            terminology_store,
+            LLMTermTranslator(create_llm()),
+            load_seed_terms=False,
+        )
+    register_default_capabilities(
+        capability_registry,
+        get_default_registry(),
+        terminology_service=terminology_service,
+    )
+    llm_router = None
+    if with_llm:
+        llm_router = LLMIntentDecisionRouter(
+            LLMIntentRouterProvider(create_llm()),
+            CapabilityCatalog.from_registry(capability_registry),
+        )
+    service = ConversationApplicationService(
+        store,
+        capability_registry,
+        llm_router=llm_router,
+        normalize_queries=False,
+    )
+    return store, service
+
+
+async def _run_session_action(args, action: str) -> None:
+    setup_logging()
+    settings = get_settings()
+    _store, service = _build_conversation_service(settings, with_llm=False)
+    try:
+        if action == "status":
+            response = await service.refresh_status(args.session_id)
+        elif action == "confirm":
+            response = await service.confirm(args.session_id, args.confirmation_token)
+        else:
+            response = await getattr(service, action)(args.session_id)
+    except FileNotFoundError as exc:
+        _error("session_or_task_not_found", str(exc))
+    except ValueError as exc:
+        _error("invalid_session_operation", str(exc))
+    _json_out(response)
+
+
+async def cmd_session_status(args) -> None:
+    await _run_session_action(args, "status")
+
+
+async def cmd_session_confirm(args) -> None:
+    await _run_session_action(args, "confirm")
+
+
+async def cmd_session_pause(args) -> None:
+    await _run_session_action(args, "pause")
+
+
+async def cmd_session_resume(args) -> None:
+    await _run_session_action(args, "resume")
+
+
+async def cmd_session_cancel(args) -> None:
+    await _run_session_action(args, "cancel")
 
 
 async def cmd_run(args) -> None:
@@ -125,28 +197,35 @@ async def cmd_task_resume(args) -> None:
     })
 
 
+async def cmd_serve(args) -> None:
+    setup_logging()
+    import uvicorn
+
+    from .api import create_app
+
+    settings = get_settings()
+    config = uvicorn.Config(
+        create_app,
+        host=args.host,
+        port=args.port,
+        factory=True,
+        log_level=settings.logging.level.lower(),
+    )
+    await uvicorn.Server(config).serve()
+
+
 async def cmd_chat(args) -> None:
     setup_logging()
     settings = get_settings()
-    store = ConversationStore(settings.artifact_dir)
+    store, service = _build_conversation_service(settings)
     if args.session_id:
         session = store.load_session(args.session_id)
         if session is None:
             _error("session_not_found", f"Conversation session not found: {args.session_id}")
     else:
         session = store.create_session()
-
-    capability_registry = CapabilityRegistry()
-    register_default_capabilities(capability_registry, get_default_registry())
-    llm_router = LLMIntentDecisionRouter(
-        LLMIntentRouterProvider(create_llm()),
-        CapabilityCatalog.from_registry(capability_registry),
-    )
-    service = ConversationService(
-        store,
-        capability_registry,
-        llm_router=llm_router,
-    )
+    progress_subscriber = CliProgressSubscriber(session_id=session.session_id)
+    service.event_publisher.subscribe(progress_subscriber)
 
     print(json.dumps({
         "session_id": session.session_id,
@@ -154,17 +233,66 @@ async def cmd_chat(args) -> None:
         "message": "Chat started. Type /exit to quit.",
     }, ensure_ascii=False))
 
-    while True:
-        try:
-            content = await asyncio.to_thread(input, "> ")
-        except EOFError:
-            break
-        if content.strip().lower() in {"/exit", "/quit", "exit", "quit"}:
-            break
-        if not content.strip():
-            continue
-        response = await service.handle_message(session.session_id, content)
-        print(json.dumps(response, ensure_ascii=False, default=str))
+    try:
+        while True:
+            try:
+                content = await asyncio.to_thread(input, "> ")
+            except EOFError:
+                break
+            if content.strip().lower() in {"/exit", "/quit", "exit", "quit"}:
+                break
+            if not content.strip():
+                continue
+            try:
+                response = await _handle_chat_command(
+                    service,
+                    session.session_id,
+                    content,
+                )
+                if response is None:
+                    response = await service.handle_message(session.session_id, content)
+            except (FileNotFoundError, ValueError) as exc:
+                response = {
+                    "session_id": session.session_id,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            print(json.dumps(response, ensure_ascii=False, default=str))
+    finally:
+        service.event_publisher.unsubscribe(progress_subscriber)
+
+
+async def _handle_chat_command(
+    service: ConversationApplicationService,
+    session_id: str,
+    content: str,
+):
+    parts = content.strip().split(maxsplit=1)
+    command = parts[0].casefold()
+    argument = parts[1].strip() if len(parts) == 2 else None
+    if command == "/status":
+        return await service.refresh_status(session_id)
+    if command == "/pause":
+        return await service.pause(session_id)
+    if command == "/resume":
+        return await service.resume(session_id)
+    if command == "/cancel":
+        return await service.cancel(session_id)
+    if command == "/process":
+        return await service.handle_message(session_id, "处理这篇论文")
+    if command == "/confirm":
+        if not argument:
+            raise ValueError("/confirm requires a confirmation token")
+        return await service.confirm(session_id, argument)
+    if command == "/events":
+        events = service.list_events(session_id)
+        return {
+            "session_id": session_id,
+            "status": "active",
+            "events": [event.model_dump(mode="json") for event in events],
+            "total": len(events),
+        }
+    return None
 
 
 def main():
@@ -181,6 +309,28 @@ def main():
     p_chat = subparsers.add_parser("chat", help="启动最小论文检索聊天")
     p_chat.add_argument("--session-id", help="复用已有会话")
     p_chat.set_defaults(func=cmd_chat)
+
+    p_serve = subparsers.add_parser("serve", help="启动 HTTP/SSE 服务")
+    p_serve.add_argument("--host", default="127.0.0.1", help="监听地址")
+    p_serve.add_argument("--port", type=int, default=8000, help="监听端口")
+    p_serve.set_defaults(func=cmd_serve)
+
+    p_session = subparsers.add_parser("session", help="会话控制")
+    session_sub = p_session.add_subparsers(dest="session_cmd")
+
+    p_session_status = session_sub.add_parser("status", help="查看会话状态")
+    p_session_status.add_argument("session_id", help="会话ID")
+    p_session_status.set_defaults(func=cmd_session_status)
+
+    p_session_confirm = session_sub.add_parser("confirm", help="确认待执行动作")
+    p_session_confirm.add_argument("session_id", help="会话ID")
+    p_session_confirm.add_argument("confirmation_token", help="确认令牌")
+    p_session_confirm.set_defaults(func=cmd_session_confirm)
+
+    for action in ("pause", "resume", "cancel"):
+        parser_action = session_sub.add_parser(action, help=f"{action} 会话任务")
+        parser_action.add_argument("session_id", help="会话ID")
+        parser_action.set_defaults(func=globals()[f"cmd_session_{action}"])
 
     p_tasks = subparsers.add_parser("tasks", help="任务管理")
     tasks_sub = p_tasks.add_subparsers(dest="tasks_cmd")
@@ -221,6 +371,8 @@ def main():
             p_tasks.print_help()
         elif args.command == "task" and not args.task_cmd:
             p_task.print_help()
+        elif args.command == "session" and not args.session_cmd:
+            p_session.print_help()
         else:
             parser.print_help()
         sys.exit(1)

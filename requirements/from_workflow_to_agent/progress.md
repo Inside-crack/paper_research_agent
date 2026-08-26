@@ -1,7 +1,7 @@
 # From Workflow To Agent 进度跟踪
 
-**状态**：P31/P32 已完成，P33 抽离工作进行中
-**完成度**：P31 100%，P32 100%，P33 100%，P34/P35 待开始，P36 最小 CLI 已完成
+**状态**：P31-P34 已完成，下一阶段进入 P35
+**完成度**：P31 100%，P32 100%，P33 100%，P34 100%，P35/P36 待实现
 **最后更新**：2026-08-24
 
 ## 已有基础
@@ -20,8 +20,8 @@
 |------|------|------|
 | P31 | Conversation Session 与消息模型 | 已完成 |
 | P32 | Capability 契约、Adapter、Registry 与 Intent Router | 已完成 |
-| P33 | PaperProcessingWorkflow 抽离 | 方案讨论中 |
-| P34 | 对话应用服务与用户交互状态 | 待开始 |
+| P33 | PaperProcessingWorkflow 抽离 | 已完成 |
+| P34 | 对话应用服务与用户交互状态 | 已完成 |
 | P35 | 事件流与 ResponseComposer | 待开始 |
 | P36 | Chat CLI 与 HTTP API | 最小 Chat CLI 已完成，HTTP/API 待开始 |
 

@@ -8,7 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from ..models.conversation import ConversationContext, ConversationMessage, ConversationSession
+from ..models.conversation import (
+    ConversationContext,
+    ConversationMessage,
+    ConversationSession,
+    ConversationSessionStatus,
+    SESSION_STATUS_TRANSITIONS,
+)
 from ..models.paper_candidate import PaperCandidateSet
 from .manifest import atomic_write_json
 
@@ -296,6 +302,23 @@ class ConversationStore:
         self.save_session(session)
         return session
 
+    def update_status(
+        self,
+        session_id: str,
+        status: ConversationSessionStatus,
+    ) -> ConversationSession:
+        """Persist a conversation lifecycle status change."""
+        session = self._require_session(session_id)
+        if status not in SESSION_STATUS_TRANSITIONS[session.status]:
+            raise ValueError(
+                f"Invalid conversation status transition: "
+                f"{session.status} -> {status}"
+            )
+        session.status = status
+        session.updated_at = datetime.utcnow()
+        self.save_session(session)
+        return session
+
     def save_paper_candidate_set(self, candidate_set: PaperCandidateSet) -> Path:
         """Persist a chat/search candidate set as a dedicated atomic artifact."""
         if not isinstance(candidate_set, PaperCandidateSet):
@@ -328,5 +351,20 @@ class ConversationStore:
             raise ValueError(
                 f"Paper candidate set id mismatch: expected {candidate_set_id!r}, "
                 f"got {candidate_set.id!r}"
+            )
+        return candidate_set
+
+    def load_paper_candidate_set_for_session(
+        self,
+        candidate_set_id: str,
+        session_id: str,
+    ) -> Optional[PaperCandidateSet]:
+        """Load a candidate set only when it is explicitly owned by a session."""
+        candidate_set = self.load_paper_candidate_set(candidate_set_id)
+        if candidate_set is None:
+            return None
+        if candidate_set.session_id != session_id:
+            raise ValueError(
+                "paper candidate set does not belong to conversation session"
             )
         return candidate_set

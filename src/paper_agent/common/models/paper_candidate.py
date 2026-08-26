@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import Field
@@ -37,7 +38,9 @@ class PaperCandidate(BaseModelWithId):
 
 class PaperCandidateSet(BaseModelWithId):
     research_spec_id: str
+    session_id: Optional[str] = None
     query_used: str = ""
+    queried_at: datetime = Field(default_factory=datetime.utcnow)
     candidates: list[PaperCandidate] = Field(default_factory=list)
     total_results: int = 0
     deduplication_notes: str = ""

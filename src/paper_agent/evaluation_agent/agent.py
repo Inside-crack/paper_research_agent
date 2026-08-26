@@ -163,7 +163,15 @@ class EvaluationAgent(BaseAgent):
         for k, v in evidence.items():
             if k == "research_spec" and isinstance(v, dict):
                 result[k] = {
-                    key: v[key] for key in ["user_query", "task_type", "domain", "keywords", "constraints"]
+                    key: v[key] for key in [
+                        "user_query",
+                        "task_type",
+                        "domain",
+                        "keywords",
+                        "constraints",
+                        "target_paper_arxiv_id",
+                        "target_paper_url",
+                    ]
                     if key in v
                 }
             elif k == "selected_paper" and isinstance(v, dict):
@@ -173,6 +181,17 @@ class EvaluationAgent(BaseAgent):
             else:
                 result[k] = v
         return result
+
+    @staticmethod
+    def _normalize_arxiv_id(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        normalized = value.strip().rstrip("/")
+        if "/abs/" in normalized:
+            normalized = normalized.rsplit("/abs/", 1)[-1]
+        if normalized.startswith("arXiv:"):
+            normalized = normalized[6:]
+        return normalized.split("v", 1)[0]
 
     def _trim_output(self, output: dict[str, Any]) -> dict[str, Any]:
         result = {}
@@ -283,6 +302,28 @@ class EvaluationAgent(BaseAgent):
             ))
         else:
             passed += 1
+
+        if phase == TaskPhase.PAPER_RETRIEVAL:
+            spec = evidence.get("research_spec", {})
+            target_id = self._normalize_arxiv_id(
+                spec.get("target_paper_arxiv_id")
+            ) if isinstance(spec, dict) else ""
+            if target_id:
+                target = output.get("target_paper")
+                actual_id = self._normalize_arxiv_id(
+                    target.get("arxiv_id")
+                ) if isinstance(target, dict) else ""
+                if not output.get("target_paper_verified") or actual_id != target_id:
+                    failed += 1
+                    issues.append(EvaluationIssue(
+                        issue_type="target_paper_missing",
+                        severity=SeverityLevel.CRITICAL,
+                        description="Confirmed target paper was not fetched into target_paper",
+                        evidence=f"expected={target_id}, actual={actual_id or 'missing'}",
+                        suggestion="Fetch the target with arxiv_get_paper before related-paper search",
+                    ))
+                else:
+                    passed += 1
 
         if plan:
             if plan.failed_steps() and phase != TaskPhase.EXPERIMENT_EXECUTION:

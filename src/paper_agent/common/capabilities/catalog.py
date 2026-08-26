@@ -200,6 +200,9 @@ DEFAULT_CAPABILITY_METADATA: dict[str, dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
+                "arxiv_id": {"type": "string", "minLength": 1},
+                "url": {"type": "string", "format": "uri"},
+                "pdf_url": {"type": "string", "format": "uri"},
                 "selected_sections": {
                     "type": "array",
                     "items": {"type": "string", "minLength": 1},
