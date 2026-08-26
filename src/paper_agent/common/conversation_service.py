@@ -27,13 +27,17 @@ class ConversationService:
         registry: CapabilityRegistry,
         *,
         llm_router: Optional[LLMDecisionRouter] = None,
+        normalize_queries: bool = True,
     ):
         self.store = store
         self.registry = registry
         self.security_policy = CapabilityExecutionSecurityPolicy(
             CapabilityCatalog.from_registry(registry)
         )
-        self.deterministic_router = DeterministicIntentRouter(registry)
+        self.deterministic_router = DeterministicIntentRouter(
+            registry,
+            normalize_queries=normalize_queries,
+        )
         self.router = HybridIntentRouter(
             self.deterministic_router,
             llm_router,
@@ -51,6 +55,11 @@ class ConversationService:
         session = self.store.load_session(session_id)
         if session is None:
             raise FileNotFoundError(f"Conversation session does not exist: {session_id}")
+        if session.context.candidate_set_id:
+            self.store.load_paper_candidate_set_for_session(
+                session.context.candidate_set_id,
+                session_id,
+            )
 
         projection = self.context_projector.project(
             session,
@@ -121,6 +130,7 @@ class ConversationService:
             try:
                 candidate_set = PaperCandidateSet(
                     research_spec_id=session.active_task_id or session_id,
+                    session_id=session_id,
                     query_used=(result.data or {}).get("query") or "",
                     candidates=[
                         PaperCandidate.model_validate(candidate)
@@ -136,7 +146,13 @@ class ConversationService:
             else:
                 candidate_ref = candidate_path.relative_to(self.store.base_dir).as_posix()
                 result.data["candidate_set_id"] = candidate_set.id
-                reply = f"已找到 {candidate_count} 篇候选论文，请告诉我想选择哪一篇。"
+                result.data["session_id"] = session_id
+                result.data["queried_at"] = candidate_set.queried_at.isoformat()
+                reply = (
+                    f"已找到 {candidate_count} 篇候选论文，请告诉我想选择哪一篇。"
+                    f"（session_id={session_id}, candidate_set_id={candidate_set.id}, "
+                    f"queried_at={candidate_set.queried_at.isoformat()}）"
+                )
                 status = "waiting_confirmation"
         else:
             reply = f"论文检索失败：{result.error}"
@@ -162,6 +178,10 @@ class ConversationService:
                     if result.success
                     else session.context.candidate_papers,
                     "candidate_set_id": candidate_set.id if result.success else session.context.candidate_set_id,
+                    "candidate_queried_at": (
+                        candidate_set.queried_at if result.success
+                        else session.context.candidate_queried_at
+                    ),
                 }
             ),
         )

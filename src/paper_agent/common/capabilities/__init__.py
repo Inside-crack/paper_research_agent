@@ -60,6 +60,8 @@ from .intent_provider import (
 from .structured_router import LLMIntentDecisionRouter
 from .router import DeterministicIntentRouter
 from .hybrid_router import HybridIntentRouter
+from .terminology import LLMTermTranslator, TerminologyService
+from .search_evaluation import ndcg_at_k, recall_at_k, reciprocal_rank
 
 __all__ = [
     "CapabilityAdapter",
@@ -108,5 +110,10 @@ __all__ = [
     "LLMIntentDecisionRouter",
     "DeterministicIntentRouter",
     "HybridIntentRouter",
+    "LLMTermTranslator",
+    "TerminologyService",
+    "recall_at_k",
+    "reciprocal_rank",
+    "ndcg_at_k",
     "IntentDecision",
 ]

@@ -52,6 +52,18 @@ def test_routes_search_with_existing_arguments():
     }
 
 
+def test_normalizes_chinese_security_search_query():
+    decision = router("paper_search").route(
+        message("找一下与AI和防火墙结合的论文"),
+        ConversationContext(),
+    )
+
+    assert decision.matched is True
+    assert decision.arguments["query"] == (
+        "AI firewall integration"
+    )
+
+
 def test_routes_download_with_arxiv_id():
     decision = router("paper_download").route(
         message("下载论文 2412.05449v1"),

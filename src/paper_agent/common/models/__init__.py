@@ -7,7 +7,7 @@ from .base import (
     TraceEntry,
     BaseModelWithId,
 )
-from .research_spec import ResearchSpec
+from .research_spec import PaperRetrievalInput, ResearchSpec
 from .paper_candidate import PaperCandidate, PaperCandidateSet
 from .paper_artifact import PaperArtifact, PaperSection, TermEntry
 from .reproduction_spec import ReproductionSpec, ExperimentPlan
@@ -18,16 +18,34 @@ from .task_state import (
     PAPER_PROCESSING_SUBSTEPS,
     PaperProcessingStepState,
     StageStatus,
+    TaskControlRequest,
+    TaskLifecycleStatus,
     TaskState,
 )
 from .execution_plan import ExecutionPlan, PlanStep
+from .agent_event import AgentEvent, AgentEventType
+from .event_payloads import (
+    EVENT_PAYLOAD_MODELS,
+    ArtifactCreatedPayload,
+    CandidateFoundPayload,
+    EvaluationCompletedPayload,
+    IntentDetectedPayload,
+    ResponseReadyPayload,
+    StepCompletedPayload,
+    StepStartedPayload,
+    TaskLifecyclePayload,
+    WorkflowStartedPayload,
+)
 from .conversation import (
     ConversationContext,
     ConversationMessage,
     ConversationMessageRole,
+    PendingAction,
+    SESSION_STATUS_TRANSITIONS,
     ConversationSession,
     ConversationSessionStatus,
 )
+from .terminology import TerminologyEntry, TerminologyTranslation
 
 __all__ = [
     "TaskPhase",
@@ -38,6 +56,7 @@ __all__ = [
     "TraceEntry",
     "BaseModelWithId",
     "ResearchSpec",
+    "PaperRetrievalInput",
     "PaperCandidate",
     "PaperCandidateSet",
     "PaperArtifact",
@@ -53,14 +72,32 @@ __all__ = [
     "FinalReport",
     "ResultComparison",
     "TaskState",
+    "TaskLifecycleStatus",
+    "TaskControlRequest",
     "StageStatus",
     "PaperProcessingStepState",
     "PAPER_PROCESSING_SUBSTEPS",
     "ExecutionPlan",
     "PlanStep",
+    "AgentEvent",
+    "AgentEventType",
+    "EVENT_PAYLOAD_MODELS",
+    "IntentDetectedPayload",
+    "CandidateFoundPayload",
+    "WorkflowStartedPayload",
+    "StepStartedPayload",
+    "StepCompletedPayload",
+    "ArtifactCreatedPayload",
+    "EvaluationCompletedPayload",
+    "TaskLifecyclePayload",
+    "ResponseReadyPayload",
     "ConversationMessage",
     "ConversationMessageRole",
+    "PendingAction",
+    "SESSION_STATUS_TRANSITIONS",
     "ConversationContext",
     "ConversationSession",
     "ConversationSessionStatus",
+    "TerminologyEntry",
+    "TerminologyTranslation",
 ]

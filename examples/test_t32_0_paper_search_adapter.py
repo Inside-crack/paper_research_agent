@@ -150,6 +150,41 @@ def test_malformed_tool_output_is_rejected():
     assert result.error.startswith("Invalid arxiv_search output:")
 
 
+def test_search_results_are_ranked_by_title_and_abstract_relevance():
+    registry = FakeToolRegistry(
+        {
+            "arxiv_search": ToolResult.ok(
+                data={
+                    "results": [
+                        {
+                            **candidate("2401.00001v1"),
+                            "title": "General Machine Learning Methods",
+                            "abstract": "A broad study of optimization.",
+                        },
+                        {
+                            **candidate("2401.00002v1"),
+                            "title": "AI Firewall for Network Security",
+                            "abstract": "We study firewall intrusion detection.",
+                        },
+                    ]
+                }
+            )
+        }
+    )
+    adapter = PaperSearchAdapter(registry)  # type: ignore[arg-type]
+
+    result = asyncio.run(
+        adapter.execute(
+            ExecutionContext(),
+            {"query": "AI firewall network security"},
+        )
+    )
+
+    assert result.success is True
+    assert result.data["candidates"][0]["arxiv_id"] == "2401.00002v1"
+    assert result.data["candidates"][0]["relevance_score"] > 0
+
+
 if __name__ == "__main__":
     test_search_maps_results_to_candidates_and_forwards_arguments()
     test_explicit_arxiv_id_uses_single_paper_lookup()

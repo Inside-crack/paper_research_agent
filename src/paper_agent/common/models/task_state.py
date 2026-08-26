@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -15,6 +15,15 @@ from .base import (
 
 
 PAPER_PROCESSING_SUBSTEPS = ("download", "parse", "glossary", "translate", "summary")
+TaskLifecycleStatus = Literal[
+    "pending",
+    "running",
+    "paused",
+    "cancelled",
+    "completed",
+    "failed",
+]
+TaskControlRequest = Literal["pause", "cancel"]
 
 
 class PaperProcessingStepState(BaseModel):
@@ -46,6 +55,9 @@ class StageStatus(BaseModel):
 
 class TaskState(BaseModelWithId):
     research_spec_id: str
+    session_id: Optional[str] = None
+    lifecycle_status: TaskLifecycleStatus = "pending"
+    control_request: Optional[TaskControlRequest] = None
     current_phase: TaskPhase = TaskPhase.TASK_INITIALIZATION
     previous_phase: Optional[TaskPhase] = None
 

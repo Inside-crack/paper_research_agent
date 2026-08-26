@@ -5,7 +5,9 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..common.config import get_settings
+from ..common.events import EventPublisher
 from ..common.logging import get_logger
+from ..common.models import AgentEvent
 from ..common.models.base import (
     Budget,
     EvaluationVerdict,
@@ -15,11 +17,13 @@ from ..common.models.base import (
 from ..common.models.evaluation_result import EvaluationResult
 from ..common.models.execution_plan import ExecutionPlan, PlanStep
 from ..common.models.research_spec import ResearchSpec
+from ..common.models.research_spec import PaperRetrievalInput
 from ..common.models.task_state import (
     StageStatus,
     TaskState,
 )
 from ..common.persistence import StatePersistence
+from ..common.persistence import EventStore
 from ..common.persistence.error_context import build_error_filename
 from ..common.persistence.naming import artifact_filename
 from ..common.persistence.task_jsonl_logger import TaskJsonLogger
@@ -53,6 +57,7 @@ class Orchestrator:
         persistence: Optional[StatePersistence] = None,
         human_confirm_callback: Optional[HumanConfirmCallback] = None,
         paper_processing_workflow: Optional[PaperProcessingWorkflow] = None,
+        event_publisher: Optional[EventPublisher] = None,
     ):
         self.settings = get_settings()
         self.tools = tool_registry or get_default_registry()
@@ -60,6 +65,9 @@ class Orchestrator:
         self.research = research_agent or ResearchAgent(tool_registry=self.tools)
         self.evaluation = evaluation_agent or EvaluationAgent(tool_registry=self.tools)
         self.persistence = persistence or StatePersistence()
+        self.event_publisher = event_publisher or EventPublisher(
+            EventStore(self.persistence.base_dir)
+        )
         self.human_confirm = human_confirm_callback or self._default_human_confirm
         self.paper_processing_workflow = paper_processing_workflow or PaperProcessingWorkflow(
             persistence=self.persistence,
@@ -95,6 +103,26 @@ class Orchestrator:
         research_spec: Optional[ResearchSpec] = None,
         resume_from_checkpoint: Optional[str] = None,
     ) -> TaskState:
+        task_state = await self.create_task(
+            user_query=user_query,
+            target_paper_url=target_paper_url,
+            target_arxiv_id=target_arxiv_id,
+            research_spec=research_spec,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
+        await self.run(task_state)
+        return task_state
+
+    async def create_task(
+        self,
+        user_query: str,
+        target_paper_url: Optional[str] = None,
+        target_arxiv_id: Optional[str] = None,
+        research_spec: Optional[ResearchSpec] = None,
+        resume_from_checkpoint: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> TaskState:
+        """Initialize or restore a task without starting its execution."""
         if resume_from_checkpoint:
             task_state = await self.persistence.load_checkpoint(resume_from_checkpoint)
             logger.info(f"Resumed task {task_state.id} from checkpoint: {resume_from_checkpoint}")
@@ -124,11 +152,15 @@ class Orchestrator:
 
             task_state = TaskState(
                 research_spec_id=research_spec.id,
+                session_id=session_id,
                 workspace_dir=str(task_workspace),
                 artifact_dir=str(task_artifacts),
             )
             task_state.metadata["user_query"] = user_query
             task_state.metadata["research_spec"] = research_spec.model_dump(mode="json")
+            task_state.metadata["paper_retrieval_input"] = (
+                self._build_paper_retrieval_input(research_spec).model_dump(mode="json")
+            )
 
             await self.persistence.save_research_spec(research_spec)
             await self.persistence.create_task_manifest(research_spec)
@@ -138,16 +170,31 @@ class Orchestrator:
 
         await self._ensure_stages_initialized(task_state)
         await self.persistence.save_checkpoint(task_state)
-        await self.run(task_state)
         return task_state
 
     async def run(self, task_state: TaskState) -> None:
+        if task_state.lifecycle_status in {"cancelled", "completed"}:
+            return
+        if task_state.lifecycle_status == "failed":
+            return
+
+        task_state.lifecycle_status = "running"
         self._task_start_time = time.time()
 
         while task_state.current_phase not in (TaskPhase.COMPLETED, TaskPhase.FAILED):
+            if task_state.control_request == "pause":
+                task_state.lifecycle_status = "paused"
+                await self.persistence.save_checkpoint(task_state)
+                return
+            if task_state.control_request == "cancel":
+                task_state.lifecycle_status = "cancelled"
+                await self.persistence.save_checkpoint(task_state)
+                return
+
             if task_state.budget.is_exceeded():
                 logger.error(f"Budget exceeded for task {task_state.id}")
                 task_state.current_phase = TaskPhase.FAILED
+                task_state.lifecycle_status = "failed"
                 task_state.metadata["failure_reason"] = "Budget exceeded"
                 if self.event_logger:
                     self.event_logger.error("Budget exceeded", phase=task_state.current_phase.value)
@@ -229,6 +276,7 @@ class Orchestrator:
                         eval_result.requires_human_intervention = True
                         eval_result.human_intervention_reason = f"Max revisions ({max_revisions}) exceeded"
                         task_state.current_phase = TaskPhase.FAILED
+                        task_state.lifecycle_status = "failed"
                         logger.warning(f"[{task_state.id}] Max revisions exceeded for phase {phase.value}")
                         if self.event_logger:
                             self.event_logger.error(f"Max revisions ({max_revisions}) exceeded for phase {phase.value}")
@@ -254,6 +302,7 @@ class Orchestrator:
                 else:
                     logger.error(f"[{task_state.id}] Phase {phase.value} BLOCKED")
                     task_state.current_phase = TaskPhase.FAILED
+                    task_state.lifecycle_status = "failed"
                     task_state.metadata["blocked_phase"] = phase.value
                     blocked_reason = eval_result.issues[0].description if eval_result.issues else "Unknown reason"
                     task_state.metadata["blocked_reason"] = blocked_reason
@@ -286,6 +335,7 @@ class Orchestrator:
             except Exception as e:
                 logger.exception(f"[{task_state.id}] Phase {phase.value} failed with exception")
                 task_state.current_phase = TaskPhase.FAILED
+                task_state.lifecycle_status = "failed"
                 task_state.metadata["exception"] = str(e)
                 if phase in task_state.stages:
                     task_state.stages[phase].error = str(e)
@@ -305,6 +355,11 @@ class Orchestrator:
                 break
 
         self._update_budget_tracking(task_state)
+        task_state.lifecycle_status = (
+            "completed"
+            if task_state.current_phase == TaskPhase.COMPLETED
+            else "failed"
+        )
         await self.persistence.save_checkpoint(task_state)
         final_status = "passed" if task_state.current_phase == TaskPhase.COMPLETED else "failed"
         await self.persistence.mark_task_completed(task_state.id, final_status)
@@ -317,6 +372,14 @@ class Orchestrator:
                 total_errors=task_state.stages.get(TaskPhase.FAILED, StageStatus(phase=TaskPhase.FAILED)).revision_count if TaskPhase.FAILED in task_state.stages else 0,
                 total_revisions=task_state.total_revisions,
             )
+        self._publish_task_event(
+            task_state,
+            "task_completed" if task_state.lifecycle_status == "completed" else "task_failed",
+            payload={
+                "reason": task_state.metadata.get("failure_reason")
+                or task_state.metadata.get("exception")
+            },
+        )
         logger.info(f"[{task_state.id}] Task finished: {task_state.current_phase.value}")
 
     async def _execute_phase_flow(self, phase: TaskPhase, task_state: TaskState) -> tuple[EvaluationResult, Optional[ExecutionPlan]]:
@@ -370,6 +433,8 @@ class Orchestrator:
         plan = await self.research.generate_plan(
             phase, task_state, is_revision=is_revision, correction_notes=correction_notes
         )
+        if phase == TaskPhase.PAPER_RETRIEVAL:
+            self._ensure_target_retrieval_step(plan, task_state)
 
         await self.persistence.save_phase_plan(task_state.id, phase, plan)
 
@@ -402,6 +467,12 @@ class Orchestrator:
             self._deduplicate_search_results(plan)
 
         research_output = await self.research.synthesize_result(phase, task_state, plan)
+        if phase == TaskPhase.PAPER_RETRIEVAL:
+            research_output = self._enforce_target_paper_output(
+                research_output,
+                plan,
+                task_state,
+            )
 
         self._save_phase_output(phase, task_state, research_output)
         await self.persistence.save_phase_output(task_state.id, phase, research_output)
@@ -414,6 +485,15 @@ class Orchestrator:
             research_output=research_output,
             original_evidence=original_evidence,
             execution_plan=plan,
+        )
+        self._publish_task_event(
+            task_state,
+            "evaluation_completed",
+            payload={
+                "verdict": eval_result.verdict.value,
+                "score": eval_result.score,
+                "issue_count": len(eval_result.issues),
+            },
         )
 
         await self.persistence.save_phase_eval(task_state.id, phase, eval_result.verdict, eval_result)
@@ -429,6 +509,136 @@ class Orchestrator:
             logger.error(f"Failed to record round results: {e}", exc_info=True)
 
         return eval_result, plan
+
+    @staticmethod
+    def _build_paper_retrieval_input(
+        research_spec: ResearchSpec,
+    ) -> PaperRetrievalInput:
+        return PaperRetrievalInput(
+            target_paper_arxiv_id=research_spec.target_paper_arxiv_id,
+            target_paper_url=research_spec.target_paper_url,
+        )
+
+    @staticmethod
+    def _normalize_arxiv_id(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        normalized = value.strip().rstrip("/")
+        if "/abs/" in normalized:
+            normalized = normalized.rsplit("/abs/", 1)[-1]
+        if normalized.startswith("arXiv:"):
+            normalized = normalized[6:]
+        return normalized.split("v", 1)[0]
+
+    def _ensure_target_retrieval_step(
+        self,
+        plan: ExecutionPlan,
+        task_state: TaskState,
+    ) -> None:
+        retrieval_input = task_state.metadata.get("paper_retrieval_input", {})
+        if not retrieval_input:
+            spec_data = task_state.metadata.get("research_spec", {})
+            retrieval_input = self._build_paper_retrieval_input(
+                ResearchSpec.model_validate(spec_data)
+            ).model_dump(mode="json")
+        target_id = retrieval_input.get("target_paper_arxiv_id")
+        if not target_id:
+            return
+
+        normalized_target = self._normalize_arxiv_id(target_id)
+        existing = [
+            step for step in plan.steps
+            if step.tool_name == "arxiv_get_paper"
+            and self._normalize_arxiv_id(step.arguments.get("arxiv_id")) == normalized_target
+        ]
+        if existing:
+            return
+
+        plan.steps.insert(
+            0,
+            PlanStep(
+                step_id="target_paper_fetch",
+                description="Fetch the confirmed target paper by exact arXiv ID",
+                tool_name="arxiv_get_paper",
+                arguments={"arxiv_id": target_id},
+                expected_output="The exact confirmed target paper metadata",
+            ),
+        )
+
+    def _enforce_target_paper_output(
+        self,
+        output: dict[str, Any],
+        plan: ExecutionPlan,
+        task_state: TaskState,
+    ) -> dict[str, Any]:
+        """Make the confirmed target paper an invariant of retrieval output."""
+        retrieval_input = task_state.metadata.get("paper_retrieval_input", {})
+        target_id = retrieval_input.get("target_paper_arxiv_id")
+        if not target_id:
+            return output
+
+        normalized_target = self._normalize_arxiv_id(target_id)
+        target_paper = None
+        for step in plan.steps:
+            if (
+                step.tool_name == "arxiv_get_paper"
+                and step.success
+                and isinstance(step.result, dict)
+                and self._normalize_arxiv_id(step.result.get("arxiv_id")) == normalized_target
+            ):
+                target_paper = dict(step.result)
+                break
+
+        normalized_output = dict(output or {})
+        candidates = [
+            dict(candidate)
+            for candidate in normalized_output.get("candidates", [])
+            if isinstance(candidate, dict)
+        ]
+        if target_paper is not None:
+            candidates = [
+                target_paper,
+                *[
+                    candidate
+                    for candidate in candidates
+                    if self._normalize_arxiv_id(candidate.get("arxiv_id")) != normalized_target
+                ],
+            ]
+
+        recommendations = [
+            recommendation
+            for recommendation in normalized_output.get("top_recommendations", [])
+            if self._normalize_arxiv_id(recommendation) != normalized_target
+        ]
+        if target_paper is not None:
+            recommendations.insert(0, target_paper.get("arxiv_id", target_id))
+
+        normalized_output["target_paper"] = target_paper
+        normalized_output["target_paper_verified"] = target_paper is not None
+        normalized_output["candidates"] = candidates
+        normalized_output["top_recommendations"] = recommendations
+        return normalized_output
+
+    def _publish_task_event(
+        self,
+        task_state: TaskState,
+        event_type: str,
+        *,
+        payload: dict[str, Any],
+    ) -> None:
+        session_id = task_state.session_id or task_state.metadata.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        correlation_id = task_state.metadata.get("correlation_id") or task_state.id
+        self.event_publisher.publish(
+            AgentEvent(
+                event_type=event_type,
+                session_id=session_id,
+                task_id=task_state.id,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+        )
 
     async def _validate_plan(self, plan: ExecutionPlan, task_state: TaskState, phase: TaskPhase) -> bool:
         for hook in self._plan_validation_hooks:
@@ -452,9 +662,19 @@ class Orchestrator:
 
     async def _execute_plan(self, plan: ExecutionPlan, task_state: TaskState, phase: TaskPhase) -> None:
         revision = task_state.stages[phase].revision_count if phase in task_state.stages else 0
-        for step in plan.steps:
+        for step_index, step in enumerate(plan.steps):
             logger.info(f"[{task_state.id}] Executing step {step.step_id}: {step.tool_name}")
             start_time = time.time()
+            self._publish_task_event(
+                task_state,
+                "step_started",
+                payload={
+                    "phase": phase.value,
+                    "step_id": step.step_id,
+                    "step_index": step_index,
+                    "total_steps": len(plan.steps),
+                },
+            )
 
             try:
                 args = {**step.arguments, "_agent": "orchestrator", "_phase": phase.value}
@@ -489,6 +709,26 @@ class Orchestrator:
                         artifact=step.artifact_id,
                         error=step.error,
                     )
+                self._publish_task_event(
+                    task_state,
+                    "step_completed",
+                    payload={
+                        "phase": phase.value,
+                        "step_id": step.step_id,
+                        "success": step.success,
+                        "artifact_refs": [step.artifact_id] if step.artifact_id else [],
+                        "error_code": "tool_failed" if not step.success else None,
+                    },
+                )
+                if step.artifact_id:
+                    self._publish_task_event(
+                        task_state,
+                        "artifact_created",
+                        payload={
+                            "artifact_refs": [step.artifact_id],
+                            "artifact_type": "step_result",
+                        },
+                    )
 
             except Exception as e:
                 step.duration_ms = int((time.time() - start_time) * 1000)
@@ -510,6 +750,17 @@ class Orchestrator:
                         step.step_id, step.tool_name, False,
                         duration_ms=step.duration_ms, error=str(e),
                     )
+                self._publish_task_event(
+                    task_state,
+                    "step_completed",
+                    payload={
+                        "phase": phase.value,
+                        "step_id": step.step_id,
+                        "success": False,
+                        "artifact_refs": [],
+                        "error_code": "tool_exception",
+                    },
+                )
 
     async def _auto_persist_step_result(
         self, step: PlanStep, task_state: TaskState, phase: TaskPhase, revision: int = 0
@@ -849,6 +1100,8 @@ class Orchestrator:
                 task_state.paper_candidate_set_id = output["candidate_set_id"]
             if "candidates" in output:
                 task_state.metadata["paper_candidates"] = output["candidates"]
+            if "target_paper" in output:
+                task_state.metadata["target_paper"] = output["target_paper"]
 
         if phase == TaskPhase.PAPER_PARSING and "paper_artifact_id" in output:
             task_state.paper_artifact_id = output["paper_artifact_id"]
