@@ -93,6 +93,7 @@ def register_default_capabilities(
     from .paper_summary import PaperSummaryAdapter
     from .paper_translate import PaperTranslateAdapter
     from .paper_processing_workflow import PaperProcessingWorkflowAdapter
+    from .paper_comparison import PaperComparisonWorkflowAdapter
 
     adapters = (
         PaperSearchAdapter(tool_registry, terminology_service),
@@ -109,5 +110,10 @@ def register_default_capabilities(
     registry.register(
         workflow,
         **metadata_for_capability(workflow.name),
+    )
+    comparison_workflow = PaperComparisonWorkflowAdapter()
+    registry.register(
+        comparison_workflow,
+        **metadata_for_capability(comparison_workflow.name),
     )
     return registry

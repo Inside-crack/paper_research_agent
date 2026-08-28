@@ -29,7 +29,7 @@ class DummyAdapter(CapabilityAdapter):
         return CapabilityResult.succeeded(data=arguments)
 
 
-def test_default_catalog_contains_six_tools_and_one_workflow():
+def test_default_catalog_contains_six_tools_and_two_workflows():
     registry = register_default_capabilities(CapabilityRegistry(), object())
     catalog = CapabilityCatalog.from_registry(registry)
 
@@ -41,6 +41,7 @@ def test_default_catalog_contains_six_tools_and_one_workflow():
         "paper_translate",
         "paper_summary",
         "process_selected_paper",
+        "compare_papers",
     ]
 
 

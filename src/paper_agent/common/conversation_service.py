@@ -11,11 +11,13 @@ from .capabilities import (
     IntentContextProjector,
     PersistentRoutingObserver,
 )
+from .memory import MemoryRecallService
+from .models.memory import MemoryRecallQuery
 from .capabilities.router import DeterministicIntentRouter
 from .capabilities.hybrid_router import LLMDecisionRouter
 from .models.conversation import ConversationMessage
 from .models.paper_candidate import PaperCandidate, PaperCandidateSet
-from .persistence import ConversationStore
+from .persistence import ConversationStore, MemoryStore
 
 
 class ConversationService:
@@ -27,6 +29,7 @@ class ConversationService:
         registry: CapabilityRegistry,
         *,
         llm_router: Optional[LLMDecisionRouter] = None,
+        memory_recall_service: Optional[MemoryRecallService] = None,
         normalize_queries: bool = True,
     ):
         self.store = store
@@ -44,6 +47,9 @@ class ConversationService:
             observer=PersistentRoutingObserver(store.base_dir),
         )
         self.context_projector = IntentContextProjector()
+        self.memory_recall_service = memory_recall_service or MemoryRecallService(
+            MemoryStore()
+        )
 
     async def handle_message(self, session_id: str, content: str) -> dict[str, Any]:
         user_message = ConversationMessage(
@@ -61,9 +67,10 @@ class ConversationService:
                 session_id,
             )
 
-        projection = self.context_projector.project(
+        projection = self._project_context(
             session,
             self.store.list_messages(session_id),
+            content,
         )
         decision = await self.router.route(
             user_message,
@@ -192,3 +199,32 @@ class ConversationService:
             "decision": decision.model_dump(),
             "result": result.model_dump(),
         }
+
+    def _project_context(
+        self,
+        session,
+        messages: list[ConversationMessage],
+        query_text: str,
+    ):
+        if not session.user_id:
+            return self.context_projector.project(session, messages)
+        selected_paper = session.context.selected_paper or {}
+        query_parts = [
+            query_text,
+            session.context.current_intent or "",
+            str(selected_paper.get("title") or ""),
+            str(selected_paper.get("arxiv_id") or ""),
+        ]
+        recall = self.memory_recall_service.search(
+            MemoryRecallQuery(
+                owner_user_id=session.user_id,
+                text=" ".join(part for part in query_parts if part),
+            )
+        )
+        return self.context_projector.project(
+            session,
+            messages,
+            memories=recall.memories,
+            memory_recall_degraded=recall.degraded,
+            memory_recall_truncated=recall.truncated,
+        )

@@ -8,6 +8,7 @@ from .routing_evaluation import (
     RoutingEvaluationReportStore,
 )
 from .terminology_store import TerminologyStore
+from .memory_store import MemoryStore
 
 __all__ = [
     "StatePersistence",
@@ -18,4 +19,5 @@ __all__ = [
     "RoutingEvaluationMetrics",
     "RoutingEvaluationComparison",
     "TerminologyStore",
+    "MemoryStore",
 ]

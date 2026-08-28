@@ -220,6 +220,34 @@ DEFAULT_CAPABILITY_METADATA: dict[str, dict[str, Any]] = {
         "confirmation_required": True,
         "allowed_intents": ["process_selected_paper"],
     },
+    "compare_papers": {
+        "execution_kind": "workflow",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "paper_refs": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 5,
+                    "items": {"type": "object"},
+                },
+                "comparison_dimensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["paper_refs"],
+            "additionalProperties": False,
+        },
+        "required_arguments": ["paper_refs"],
+        "preconditions": [
+            "ExecutionContext.task_id exists",
+            "at least two unique paper references exist",
+            "paper comparison workflow runner is registered",
+        ],
+        "confirmation_required": True,
+        "allowed_intents": ["compare_papers"],
+    },
 }
 
 

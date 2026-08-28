@@ -37,6 +37,7 @@ class PaperArtifact(BaseModelWithId):
     authors: list[str] = Field(default_factory=list)
     published_date: Optional[str] = None
     version: Optional[str] = None
+    abstract: str = ""
 
     pdf_path: Optional[str] = None
     pdf_source: str = ""

@@ -38,13 +38,33 @@ class DeterministicIntentRouter:
             "process_selected_paper",
             (
                 "处理这篇论文",
+                "处理当前选中的论文",
+                "处理当前论文",
+                "开始处理选中论文",
                 "完整处理论文",
                 "处理选中的论文",
                 "process selected paper",
                 "process the paper",
+                "process this paper",
             ),
             "请先选择一篇论文，才能启动完整论文处理流程。",
             ["selected_paper"],
+        ),
+        (
+            "compare_papers",
+            "compare_papers",
+            (
+                "比较论文",
+                "对比论文",
+                "论文对比",
+                "比较这几篇",
+                "对比这几篇",
+                "compare papers",
+                "compare these papers",
+                "paper comparison",
+            ),
+            "请提供至少两篇论文的 arXiv ID、URL或候选序号。",
+            [],
         ),
         (
             "paper_download",
@@ -201,11 +221,14 @@ class DeterministicIntentRouter:
         required_arguments: list[str],
     ) -> IntentDecision:
         execution_kind = (
-            "workflow" if capability_name == "process_selected_paper" else "tool"
+            "workflow"
+            if capability_name in {"process_selected_paper", "compare_papers"}
+            else "tool"
         )
         try:
             capability = self.registry.resolve(capability_name)
-            execution_kind = capability.execution_kind
+            if capability_name != "process_selected_paper":
+                execution_kind = capability.execution_kind
         except (KeyError, RuntimeError) as exc:
             return IntentDecision(
                 matched=False,
@@ -234,18 +257,22 @@ class DeterministicIntentRouter:
                     arguments["pdf_url"] = arxiv_url_match.group(0)
             elif arxiv_match:
                 arguments["arxiv_id"] = arxiv_match.group(1)
+        if capability_name == "compare_papers":
+            arguments["paper_refs"] = self._comparison_references(content, context)
 
         missing_arguments = [
             argument
             for argument in required_arguments
             if not self._has_route_argument(argument, arguments, context)
         ]
+        if capability_name == "compare_papers" and len(arguments["paper_refs"]) < 2:
+            missing_arguments = ["paper_refs"]
         if missing_arguments:
             return IntentDecision(
                 matched=False,
                 intent=intent,
                 capability_name=capability_name,
-                execution_kind=capability.execution_kind,
+                execution_kind=execution_kind,
                 confidence=0.9,
                 arguments=arguments,
                 missing_arguments=missing_arguments,
@@ -257,10 +284,42 @@ class DeterministicIntentRouter:
             matched=True,
             intent=intent,
             capability_name=capability_name,
-            execution_kind=capability.execution_kind,
+            execution_kind=execution_kind,
             confidence=0.9,
             arguments=arguments,
         )
+
+    def _comparison_references(
+        self,
+        content: str,
+        context: ConversationContext,
+    ) -> list[dict[str, Any]]:
+        references: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for arxiv_id in self._ARXIV_PATTERN.findall(content):
+            key = arxiv_id.split("v", 1)[0]
+            if key not in seen:
+                references.append({"arxiv_id": arxiv_id})
+                seen.add(key)
+
+        # Candidate ordinals are resolved against the persisted candidate set,
+        # keeping paper identity in code rather than asking the LLM to infer it.
+        ordinal_matches = re.findall(r"(?:候选论文|论文)\s*(\d+)", content)
+        for ordinal in ordinal_matches:
+            index = int(ordinal) - 1
+            if 0 <= index < len(context.candidate_papers):
+                candidate = context.candidate_papers[index]
+                key = str(candidate.get("arxiv_id") or candidate.get("url") or "")
+                if key and key not in seen:
+                    references.append(
+                        {
+                            "arxiv_id": candidate.get("arxiv_id"),
+                            "url": candidate.get("url"),
+                            "title": candidate.get("title"),
+                        }
+                    )
+                    seen.add(key)
+        return references
 
     @staticmethod
     def _has_route_argument(

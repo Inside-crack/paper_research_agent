@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+import re
 from typing import Any, Optional
 
 import arxiv
@@ -11,6 +11,25 @@ from ...common.logging import get_logger
 from ...common.tools.base import BaseTool, ToolResult
 
 logger = get_logger(__name__)
+
+_CODE_URL_PATTERN = re.compile(
+    r"https?://(?:www\.)?(?:github\.com|gitlab\.com)/"
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+    re.IGNORECASE,
+)
+
+
+def _extract_code_urls(*texts: Optional[str], links: list[str] | None = None) -> list[str]:
+    """Extract repository URLs from all arXiv metadata fields."""
+    values = [value for value in texts if value]
+    values.extend(links or [])
+    urls: list[str] = []
+    for value in values:
+        for match in _CODE_URL_PATTERN.findall(value):
+            url = match.rstrip(").,;")
+            if url not in urls:
+                urls.append(url)
+    return urls
 
 
 class ArxivSearchTool(BaseTool):
@@ -108,14 +127,15 @@ class ArxivSearchTool(BaseTool):
         if result.pdf_url:
             pdf_url = result.pdf_url
 
-        code_available = False
-        code_url = None
-        if result.links:
-            for link in result.links:
-                if "github" in link.href.lower() or "gitlab" in link.href.lower():
-                    code_available = True
-                    code_url = link.href
-                    break
+        links = [link.href for link in result.links] if result.links else []
+        code_urls = _extract_code_urls(
+            result.comment,
+            result.summary,
+            result.journal_ref,
+            links=links,
+        )
+        code_available = bool(code_urls)
+        code_url = code_urls[0] if code_urls else None
 
         return {
             "arxiv_id": result.get_short_id(),
@@ -133,7 +153,15 @@ class ArxivSearchTool(BaseTool):
             "categories": categories,
             "primary_category": result.primary_category,
             "version": result.get_short_id().split("v")[-1] if "v" in result.get_short_id() else "1",
-            "links": [l.href for l in result.links],
+            "links": links,
+            "code_available": code_available,
+            "code_url": code_url,
+            "code_evidence_sources": (
+                ["arxiv.comment", "arxiv.summary", "arxiv.journal_ref", "arxiv.links"]
+                if code_urls
+                else []
+            ),
+            # Kept for compatibility with older artifacts and tests.
             "code_available_hint": code_available,
             "code_url_hint": code_url,
             "source": "arxiv",

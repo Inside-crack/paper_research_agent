@@ -22,12 +22,14 @@ from ..common.models.task_state import (
     StageStatus,
     TaskState,
 )
+from ..common.memory.recall import MemoryRecallService
 from ..common.persistence import StatePersistence
 from ..common.persistence import EventStore
 from ..common.persistence.error_context import build_error_filename
 from ..common.persistence.naming import artifact_filename
 from ..common.persistence.task_jsonl_logger import TaskJsonLogger
 from ..common.tools import ToolRegistry
+from ..common.retrieval_artifact import build_paper_retrieval_artifact
 from ..workflows import PaperProcessingWorkflow
 from ..evaluation_agent import EvaluationAgent
 from ..research_agent import ResearchAgent
@@ -46,6 +48,7 @@ PHASE_TRANSITIONS: dict[TaskPhase, TaskPhase] = {
 }
 
 HumanConfirmCallback = Callable[[TaskState, TaskPhase, ExecutionPlan], Awaitable[bool]]
+TaskMemoryHook = Callable[[TaskState], Awaitable[None]]
 
 
 class Orchestrator:
@@ -58,11 +61,17 @@ class Orchestrator:
         human_confirm_callback: Optional[HumanConfirmCallback] = None,
         paper_processing_workflow: Optional[PaperProcessingWorkflow] = None,
         event_publisher: Optional[EventPublisher] = None,
+        memory_recall_service: Optional[MemoryRecallService] = None,
     ):
         self.settings = get_settings()
         self.tools = tool_registry or get_default_registry()
 
-        self.research = research_agent or ResearchAgent(tool_registry=self.tools)
+        self.research = research_agent or ResearchAgent(
+            tool_registry=self.tools,
+            memory_recall_service=memory_recall_service,
+        )
+        if research_agent is not None and hasattr(self.research, "set_memory_recall_service"):
+            self.research.set_memory_recall_service(memory_recall_service)
         self.evaluation = evaluation_agent or EvaluationAgent(tool_registry=self.tools)
         self.persistence = persistence or StatePersistence()
         self.event_publisher = event_publisher or EventPublisher(
@@ -83,6 +92,7 @@ class Orchestrator:
         self._verdict_hooks: dict[EvaluationVerdict, list[Callable]] = {v: [] for v in EvaluationVerdict}
         self._phase_hooks: dict[TaskPhase, list[Callable]] = {p: [] for p in TaskPhase}
         self._plan_validation_hooks: list[Callable] = []
+        self._task_memory_hooks: list[TaskMemoryHook] = []
         self._task_start_time: float = 0.0
         self.event_logger: Optional[TaskJsonLogger] = None
 
@@ -94,6 +104,22 @@ class Orchestrator:
 
     def on_plan_validation(self, hook: Callable) -> None:
         self._plan_validation_hooks.append(hook)
+
+    def on_task_memory(self, hook: TaskMemoryHook) -> None:
+        """Register a best-effort hook for cross-task memory candidates."""
+        if not callable(hook):
+            raise TypeError("task memory hook must be callable")
+        self._task_memory_hooks.append(hook)
+
+    async def _run_task_memory_hooks(self, task_state: TaskState) -> None:
+        for hook in tuple(self._task_memory_hooks):
+            try:
+                await hook(task_state)
+            except Exception as exc:
+                logger.warning(
+                    f"[{task_state.id}] Task memory hook failed; continuing task lifecycle",
+                    error=str(exc),
+                )
 
     async def start_task(
         self,
@@ -363,6 +389,7 @@ class Orchestrator:
         await self.persistence.save_checkpoint(task_state)
         final_status = "passed" if task_state.current_phase == TaskPhase.COMPLETED else "failed"
         await self.persistence.mark_task_completed(task_state.id, final_status)
+        await self._run_task_memory_hooks(task_state)
         total_duration = int((time.time() - self._task_start_time) * 1000) if self._task_start_time else 0
         if self.event_logger:
             total_phases = sum(1 for s in task_state.stages.values() if s.completed_at or s.error)
@@ -467,12 +494,35 @@ class Orchestrator:
             self._deduplicate_search_results(plan)
 
         research_output = await self.research.synthesize_result(phase, task_state, plan)
-        if phase == TaskPhase.PAPER_RETRIEVAL:
-            research_output = self._enforce_target_paper_output(
+        if phase == TaskPhase.TASK_INITIALIZATION:
+            research_output = self._enforce_task_initialization_output(
                 research_output,
-                plan,
                 task_state,
             )
+            await self._persist_canonical_initialization_artifact(
+                task_state,
+                research_output["research_spec"],
+            )
+        elif phase == TaskPhase.PAPER_RETRIEVAL:
+            retrieval_input = task_state.metadata.get("paper_retrieval_input", {})
+            target_id = retrieval_input.get("target_paper_arxiv_id")
+            if target_id:
+                artifact = build_paper_retrieval_artifact(
+                    plan,
+                    research_output,
+                    target_arxiv_id=target_id,
+                )
+                research_output = artifact.model_dump(mode="json")
+                await self._persist_canonical_retrieval_artifact(
+                    task_state,
+                    research_output,
+                )
+            else:
+                research_output = self._enforce_target_paper_output(
+                    research_output,
+                    plan,
+                    task_state,
+                )
 
         self._save_phase_output(phase, task_state, research_output)
         await self.persistence.save_phase_output(task_state.id, phase, research_output)
@@ -509,6 +559,132 @@ class Orchestrator:
             logger.error(f"Failed to record round results: {e}", exc_info=True)
 
         return eval_result, plan
+
+    async def _persist_canonical_retrieval_artifact(
+        self,
+        task_state: TaskState,
+        output: dict[str, Any],
+    ) -> None:
+        """Overwrite any LLM draft with the validated retrieval artifact."""
+        result = await self.tools.execute(
+            "save_artifact",
+            artifact_name="paper_candidates",
+            data=output,
+            task_id=task_state.id,
+            _agent="orchestrator",
+            _phase=TaskPhase.PAPER_RETRIEVAL.value,
+        )
+        if not result.success:
+            raise RuntimeError(
+                f"Failed to persist canonical paper_candidates artifact: {result.error}"
+            )
+
+    async def _persist_canonical_initialization_artifact(
+        self,
+        task_state: TaskState,
+        research_spec: dict[str, Any],
+    ) -> None:
+        result = await self.tools.execute(
+            "save_artifact",
+            artifact_name="research_spec",
+            data=research_spec,
+            task_id=task_state.id,
+            _agent="orchestrator",
+            _phase=TaskPhase.TASK_INITIALIZATION.value,
+        )
+        if not result.success:
+            raise RuntimeError(
+                f"Failed to persist canonical research_spec artifact: {result.error}"
+            )
+
+    @staticmethod
+    def _enforce_task_initialization_output(
+        output: dict[str, Any],
+        task_state: TaskState,
+    ) -> dict[str, Any]:
+        """Keep initialization facts aligned with the original task input."""
+        original_data = task_state.metadata.get("research_spec", {})
+        original = ResearchSpec.model_validate(original_data)
+        llm_spec = output.get("research_spec") if isinstance(output, dict) else {}
+        llm_spec = llm_spec if isinstance(llm_spec, dict) else {}
+
+        merged = original.model_dump(mode="json")
+        fillable_fields = (
+            "domain",
+            "keywords",
+            "year_range",
+            "paper_types",
+            "translation_required",
+            "translation_language",
+            "reproduction_target",
+            "compute_constraints",
+            "user_constraints",
+            "notes",
+        )
+        for field in fillable_fields:
+            current = merged.get(field)
+            proposed = llm_spec.get(field)
+            is_empty = current is None or current == "" or current == []
+            if is_empty and proposed not in (None, "", []):
+                merged[field] = proposed
+
+        constraints = llm_spec.get("constraints")
+        if isinstance(constraints, dict):
+            if not merged.get("user_constraints"):
+                merged["user_constraints"] = {
+                    str(key): str(value)
+                    for key, value in constraints.items()
+                    if value not in (None, "")
+                }
+
+        canonical_spec = ResearchSpec.model_validate(merged)
+        normalized = dict(output) if isinstance(output, dict) else {}
+        normalized["task_type"] = canonical_spec.task_type
+        normalized["research_spec"] = canonical_spec.model_dump(mode="json")
+        normalized["task_summary"] = (
+            f"任务类型={canonical_spec.task_type}，"
+            f"研究领域={canonical_spec.domain or '未指定'}"
+        )
+        normalized["ambiguities"] = Orchestrator._filter_initialization_ambiguities(
+            output.get("ambiguities", []) if isinstance(output, dict) else [],
+            canonical_spec,
+        )
+        return normalized
+
+    @staticmethod
+    def _filter_initialization_ambiguities(
+        ambiguities: Any,
+        spec: ResearchSpec,
+    ) -> list[Any]:
+        if not isinstance(ambiguities, list):
+            return []
+        provided_aliases = {
+            "task_type": ("task_type", "任务类型", "任务类型缺失"),
+            "domain": ("domain", "领域", "研究领域"),
+            "time_range": ("time_range", "year_range", "时间范围", "年份"),
+        }
+        provided = {
+            field: bool(
+                {
+                    "task_type": spec.task_type,
+                    "domain": spec.domain,
+                    "time_range": spec.year_range or spec.user_constraints.get("time_range"),
+                }[field]
+            )
+            for field in provided_aliases
+        }
+        filtered: list[Any] = []
+        for item in ambiguities:
+            text = str(item).casefold()
+            claims_missing_provided = any(
+                provided[field]
+                and any(alias.casefold() in text for alias in aliases)
+                and any(marker in text for marker in ("缺失", "不存在", "未提供", "missing", "absent"))
+                for field, aliases in provided_aliases.items()
+            )
+            if not claims_missing_provided:
+                filtered.append(item)
+        return filtered
 
     @staticmethod
     def _build_paper_retrieval_input(

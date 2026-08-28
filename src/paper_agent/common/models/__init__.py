@@ -8,8 +8,16 @@ from .base import (
     BaseModelWithId,
 )
 from .research_spec import PaperRetrievalInput, ResearchSpec
-from .paper_candidate import PaperCandidate, PaperCandidateSet
+from .paper_candidate import PaperCandidate, PaperCandidateSet, PaperRetrievalArtifact
 from .paper_artifact import PaperArtifact, PaperSection, TermEntry
+from .paper_comparison import (
+    ComparisonMatrixRow,
+    ComparisonPaperFacts,
+    ComparisonSpec,
+    PaperComparisonArtifact,
+    PaperConflict,
+    PaperReference,
+)
 from .reproduction_spec import ReproductionSpec, ExperimentPlan
 from .experiment_run import ExperimentRun, ExperimentMetrics
 from .evaluation_result import EvaluationResult, EvaluationIssue, Correction
@@ -46,6 +54,22 @@ from .conversation import (
     ConversationSessionStatus,
 )
 from .terminology import TerminologyEntry, TerminologyTranslation
+from .memory import (
+    MemoryCandidate,
+    MemoryCandidateStatus,
+    MemoryDecision,
+    MemoryJob,
+    MemoryJobStatus,
+    MemoryItem,
+    MemoryRecallItem,
+    MemoryRecallQuery,
+    ConsolidationResult,
+    RecallResult,
+    MemoryScope,
+    MemorySourceKind,
+    MemoryStatus,
+    MemoryType,
+)
 
 __all__ = [
     "TaskPhase",
@@ -59,9 +83,16 @@ __all__ = [
     "PaperRetrievalInput",
     "PaperCandidate",
     "PaperCandidateSet",
+    "PaperRetrievalArtifact",
     "PaperArtifact",
     "PaperSection",
     "TermEntry",
+    "ComparisonSpec",
+    "PaperReference",
+    "PaperConflict",
+    "ComparisonPaperFacts",
+    "ComparisonMatrixRow",
+    "PaperComparisonArtifact",
     "ReproductionSpec",
     "ExperimentPlan",
     "ExperimentRun",
@@ -100,4 +131,18 @@ __all__ = [
     "ConversationSessionStatus",
     "TerminologyEntry",
     "TerminologyTranslation",
+    "MemoryItem",
+    "MemoryCandidate",
+    "MemoryType",
+    "MemoryScope",
+    "MemoryStatus",
+    "MemoryCandidateStatus",
+    "MemorySourceKind",
+    "MemoryDecision",
+    "MemoryJob",
+    "MemoryJobStatus",
+    "MemoryRecallQuery",
+    "MemoryRecallItem",
+    "RecallResult",
+    "ConsolidationResult",
 ]

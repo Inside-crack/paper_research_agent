@@ -88,6 +88,20 @@ def test_download_uses_selected_paper_from_context():
     assert decision.arguments == {}
 
 
+def test_process_selected_paper_routes_natural_language_to_workflow():
+    decision = router("process_selected_paper").route(
+        message("处理当前选中的论文"),
+        ConversationContext(
+            selected_paper={"arxiv_id": "2412.05449v1", "title": "A paper"}
+        ),
+    )
+
+    assert decision.matched is True
+    assert decision.intent == "process_selected_paper"
+    assert decision.capability_name == "process_selected_paper"
+    assert decision.execution_kind == "workflow"
+
+
 def test_parse_requires_explicit_artifact_path():
     decision = router("paper_parse").route(
         message("解析论文"),
@@ -166,7 +180,7 @@ def test_disabled_capability_cannot_be_routed():
     assert "disabled" in (decision.reason or "")
 
 
-def test_default_registration_exposes_six_tools_and_one_workflow():
+def test_default_registration_exposes_six_tools_and_two_workflows():
     registry = CapabilityRegistry()
     register_default_capabilities(registry, object())
 
@@ -178,6 +192,7 @@ def test_default_registration_exposes_six_tools_and_one_workflow():
         "paper_translate",
         "paper_summary",
         "process_selected_paper",
+        "compare_papers",
     ]
 
 
@@ -191,5 +206,5 @@ if __name__ == "__main__":
     test_translate_and_summary_report_missing_content_arguments()
     test_unsupported_intent_is_not_matched()
     test_disabled_capability_cannot_be_routed()
-    test_default_registration_exposes_six_tools_and_one_workflow()
+    test_default_registration_exposes_six_tools_and_two_workflows()
     print("10 passed")
