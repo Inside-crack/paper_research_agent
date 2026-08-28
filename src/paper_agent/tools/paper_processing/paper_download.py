@@ -85,6 +85,7 @@ class PaperDownloadTool(BaseTool):
             authors=metadata.get("authors", []),
             published_date=metadata.get("published_date"),
             version=version,
+            abstract=str(metadata.get("abstract") or metadata.get("summary") or ""),
             pdf_path=relative_pdf_path,
             pdf_source="arxiv",
         )

@@ -9,6 +9,7 @@ from ..models.conversation import (
     ConversationMessage,
     ConversationSession,
 )
+from ..models.memory import MemoryRecallItem
 
 
 class ContextProjectionConfig(BaseModel):
@@ -22,6 +23,8 @@ class ContextProjectionConfig(BaseModel):
     max_candidate_chars: int = Field(default=2000, ge=100, le=10000)
     max_artifact_refs: int = Field(default=20, ge=1, le=100)
     max_selected_sections: int = Field(default=20, ge=1, le=100)
+    max_relevant_memories: int = Field(default=5, ge=1, le=100)
+    max_memory_chars: int = Field(default=1200, ge=100, le=10000)
 
 
 class ProjectedConversationMessage(BaseModel):
@@ -32,6 +35,22 @@ class ProjectedConversationMessage(BaseModel):
     role: Literal["user", "assistant", "system", "tool"]
     content: str
     task_id: Optional[str] = None
+
+
+class ProjectedMemory(BaseModel):
+    """Bounded memory view safe to expose to a Router."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    content: str
+    memory_type: str
+    scope: str
+    confidence: float
+    priority: int
+    source_task_id: Optional[str] = None
+    source_artifact_ids: list[str] = Field(default_factory=list)
+    relevance_score: float
 
 
 class IntentContextProjection(BaseModel):
@@ -47,6 +66,10 @@ class IntentContextProjection(BaseModel):
     selected_sections: list[str] = Field(default_factory=list)
     active_task_id: Optional[str] = None
     artifact_refs: list[str] = Field(default_factory=list)
+    relevant_memories: list[ProjectedMemory] = Field(default_factory=list)
+    memory_disclaimer: Optional[str] = None
+    memory_recall_degraded: bool = False
+    memory_recall_truncated: bool = False
     session_status: str
 
 
@@ -74,6 +97,9 @@ class IntentContextProjector:
         self,
         session: ConversationSession,
         messages: Sequence[ConversationMessage],
+        memories: Sequence[MemoryRecallItem] = (),
+        memory_recall_degraded: bool = False,
+        memory_recall_truncated: bool = False,
     ) -> IntentContextProjection:
         if not isinstance(session, ConversationSession):
             raise TypeError("session must be a ConversationSession")
@@ -87,6 +113,11 @@ class IntentContextProjector:
                 raise ValueError(
                     "message session_id does not match projection session"
                 )
+        if not isinstance(memories, Sequence):
+            raise TypeError("memories must be a sequence")
+        for memory in memories:
+            if not isinstance(memory, MemoryRecallItem):
+                raise TypeError("memories must contain MemoryRecallItem values")
 
         recent_messages = [
             ProjectedConversationMessage(
@@ -116,6 +147,23 @@ class IntentContextProjector:
             context.selected_sections,
             self.config.max_selected_sections,
         )
+        projected_memories = [
+            ProjectedMemory(
+                memory_id=memory.memory_id,
+                content=self._truncate(
+                    memory.content,
+                    self.config.max_memory_chars,
+                ),
+                memory_type=memory.memory_type,
+                scope=memory.scope,
+                confidence=memory.confidence,
+                priority=memory.priority,
+                source_task_id=memory.source_task_id,
+                source_artifact_ids=memory.source_artifact_ids[: self.config.max_artifact_refs],
+                relevance_score=memory.relevance_score,
+            )
+            for memory in list(memories)[: self.config.max_relevant_memories]
+        ]
 
         return IntentContextProjection(
             recent_messages=recent_messages,
@@ -126,6 +174,15 @@ class IntentContextProjector:
             selected_sections=selected_sections,
             active_task_id=context.active_task_id or session.active_task_id,
             artifact_refs=artifact_refs,
+            relevant_memories=projected_memories,
+            memory_disclaimer=(
+                "以下记忆来自历史任务，仅作为参考；不代表当前任务已完成，"
+                "也不能替代当前任务的工具事实。"
+                if projected_memories
+                else None
+            ),
+            memory_recall_degraded=memory_recall_degraded,
+            memory_recall_truncated=memory_recall_truncated,
             session_status=session.status,
         )
 

@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     artifact_dir: Path = Field(default=Path("data/artifacts"))
+    memory_dir: Path = Field(default=Path("data/memory"))
     cache_dir: Path = Field(default=Path("data/cache"))
     log_dir: Path = Field(default=Path("data/logs"))
     workspace_dir: Path = Field(default=Path("data/workspaces"))
@@ -145,7 +146,13 @@ class Settings(BaseSettings):
         return settings
 
     def _ensure_dirs(self) -> None:
-        for dir_path in [self.artifact_dir, self.cache_dir, self.log_dir, self.workspace_dir]:
+        for dir_path in [
+            self.artifact_dir,
+            self.memory_dir,
+            self.cache_dir,
+            self.log_dir,
+            self.workspace_dir,
+        ]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
 

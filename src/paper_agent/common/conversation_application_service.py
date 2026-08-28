@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, Optional
 
 from .conversation_service import ConversationService
@@ -14,12 +17,26 @@ from .models.conversation import (
 )
 from .models import AgentEvent
 from .models.paper_candidate import PaperCandidate, PaperCandidateSet
+from .models.paper_comparison import ComparisonSpec, PaperReference
+from .models.paper_artifact import PaperArtifact
 from .models.research_spec import ResearchSpec
 from .models.task_state import TaskState
+from .models.memory import MemoryRecallQuery, MemoryType
+from .memory import MemoryExtractor, MemoryPipeline
+from .memory import MemoryRecallService
 from .response_composer import ComposedResponse, ResponseComposer
 from .persistence import ConversationStore
 from .persistence import EventStore
+from .persistence import MemoryStore
 from ..orchestrator import Orchestrator
+from ..common.config import get_settings
+from ..common.comparison_export import PaperComparisonExporter
+from ..common.paper_acquisition import PaperAcquisitionService
+from ..workflows.paper_comparison import PaperComparisonWorkflow
+from ..common.llm import LLMMessage, MessageRole
+from ..common.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConversationApplicationService(ConversationService):
@@ -50,18 +67,35 @@ class ConversationApplicationService(ConversationService):
         llm_router=None,
         orchestrator: Optional[Orchestrator] = None,
         event_publisher: Optional[EventPublisher] = None,
+        memory_store: Optional[MemoryStore] = None,
+        memory_recall_service: Optional[MemoryRecallService] = None,
         normalize_queries: bool = True,
     ):
+        effective_memory_store = memory_store or MemoryStore()
         super().__init__(
             store,
             registry,
             llm_router=llm_router,
+            memory_recall_service=memory_recall_service
+            or MemoryRecallService(effective_memory_store),
             normalize_queries=normalize_queries,
         )
         self.orchestrator = orchestrator or Orchestrator()
+        if hasattr(self.orchestrator, "research") and hasattr(
+            self.orchestrator.research, "set_memory_recall_service"
+        ):
+            self.orchestrator.research.set_memory_recall_service(
+                self.memory_recall_service
+            )
         self.event_publisher = event_publisher or EventPublisher(
             EventStore(store.base_dir)
         )
+        self.memory_store = effective_memory_store
+        self.memory_extractor = MemoryExtractor()
+        self.memory_pipeline = MemoryPipeline(self.memory_store)
+        register_memory_hook = getattr(self.orchestrator, "on_task_memory", None)
+        if callable(register_memory_hook):
+            register_memory_hook(self._capture_task_memory)
         self.response_composer = ResponseComposer()
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_states: dict[str, TaskState] = {}
@@ -104,6 +138,7 @@ class ConversationApplicationService(ConversationService):
             task_id=session.active_task_id,
         )
         self.store.append_message(session_id, user_message)
+        self._capture_user_message_memory(session, user_message)
         session = self._require_session(session_id)
         session = self._refresh_candidate_context(session)
         selected = self._select_candidate(session, content)
@@ -133,9 +168,10 @@ class ConversationApplicationService(ConversationService):
             )
 
         session = self._require_session(session_id)
-        projection = self.context_projector.project(
+        projection = self._project_context(
             session,
             self.store.list_messages(session_id),
+            content,
         )
         decision = await self.router.route(
             user_message,
@@ -184,36 +220,14 @@ class ConversationApplicationService(ConversationService):
             decision.capability_name == "process_selected_paper"
             and explicit_paper is not None
         ):
-            authorization = self.security_policy.authorize(
-                decision,
-                confirmed=True,
-            )
-            if not authorization.allowed:
-                reply = f"该操作未被允许执行：{authorization.reason}"
-                self._append_reply(
-                    session_id,
-                    reply,
-                    metadata={
-                        "decision": decision_data,
-                        "security": authorization.model_dump(mode="json"),
-                    },
-                    correlation_id=correlation_id,
-                )
-                return self._response(
-                    self._require_session(session_id),
-                    reply=reply,
-                    status="blocked",
-                    decision=decision_data,
-                    security=authorization.model_dump(mode="json"),
-                )
-            return await self._start_processing_task(
+            # An explicit ID/URL identifies the paper, but never confirms the
+            # destructive workflow. Carry it into the pending action instead.
+            session = self._require_session(session_id)
+            self.store.update_context(
                 session_id,
-                explicit_paper,
-                decision_data=decision_data,
-                action_id=None,
-                confirmation_token=None,
-                correlation_id=correlation_id,
+                session.context.model_copy(update={"selected_paper": explicit_paper}),
             )
+            session = self._require_session(session_id)
 
         authorization = self.security_policy.authorize(decision)
         if not authorization.allowed and authorization.requires_confirmation:
@@ -324,6 +338,16 @@ class ConversationApplicationService(ConversationService):
             return await self.refresh_status(session_id)
         if pending is None or pending.confirmation_token != confirmation_token:
             raise ValueError("confirmation token is invalid or expired")
+        if pending.capability_name == "compare_papers":
+            if session.active_task_id:
+                return self.get_status(session_id)
+            return await self._start_comparison_task(
+                session_id,
+                dict(pending.arguments),
+                action_id=pending.action_id,
+                confirmation_token=confirmation_token,
+                correlation_id=uuid.uuid4().hex,
+            )
         if pending.capability_name != "process_selected_paper":
             raise ValueError(
                 f"unsupported pending capability: {pending.capability_name}"
@@ -355,6 +379,7 @@ class ConversationApplicationService(ConversationService):
         session = self._require_session(session_id)
         research_spec = ResearchSpec(
             user_query=selected_paper.get("title") or "Process selected paper",
+            task_type="paper_analysis",
             target_paper_url=selected_paper.get("url"),
             target_paper_arxiv_id=(
                 selected_paper.get("arxiv_id")
@@ -370,6 +395,16 @@ class ConversationApplicationService(ConversationService):
         task_state.metadata["correlation_id"] = correlation_id
         task_state.metadata["paper_processing_selected_candidate"] = selected_paper
         task_state.metadata["paper_candidates"] = [selected_paper]
+        self._attach_task_memory_context(
+            task_state,
+            session,
+            selected_paper.get("title") or selected_paper.get("arxiv_id") or "",
+        )
+        self._capture_selected_paper_confirmation(
+            session,
+            task_state,
+            selected_paper,
+        )
         if action_id is not None:
             task_state.metadata["pending_action_id"] = action_id
         if decision_data is not None:
@@ -413,6 +448,391 @@ class ConversationApplicationService(ConversationService):
                 else "已识别指定论文，开始处理论文。"
             ),
         )
+
+    async def _start_comparison_task(
+        self,
+        session_id: str,
+        arguments: dict[str, Any],
+        *,
+        action_id: Optional[str],
+        confirmation_token: Optional[str],
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        references = arguments.get("paper_refs")
+        if not isinstance(references, list) or len(references) < 2:
+            raise ValueError("comparison requires at least two paper references")
+        comparison_spec = ComparisonSpec(
+            user_query="多论文对比分析",
+            paper_refs=[PaperReference.model_validate(item) for item in references],
+            comparison_dimensions=arguments.get("comparison_dimensions") or [],
+        )
+        research_spec = ResearchSpec(
+            user_query="多论文对比分析",
+            task_type="paper_comparison",
+            translation_language=comparison_spec.translation_language,
+        )
+        task_state = await self.orchestrator.create_task(
+            user_query=research_spec.user_query,
+            research_spec=research_spec,
+            session_id=session_id,
+        )
+        task_state.lifecycle_status = "running"
+        task_state.metadata["comparison_spec"] = comparison_spec.model_dump(mode="json")
+        task_state.metadata["comparison_status"] = "running"
+        task_state.metadata["correlation_id"] = correlation_id
+        session = self._require_session(session_id)
+        self._attach_task_memory_context(
+            task_state,
+            session,
+            "多论文对比分析 " + " ".join(
+                str(item.get("title") or item.get("arxiv_id") or "")
+                for item in references
+                if isinstance(item, dict)
+            ),
+        )
+        if action_id is not None:
+            task_state.metadata["pending_action_id"] = action_id
+        await self.orchestrator.persistence.save_checkpoint(task_state)
+
+        self._publish_event(
+            "workflow_started",
+            session,
+            correlation_id,
+            task_id=task_state.id,
+            payload={"workflow_name": "paper_comparison"},
+        )
+        cleared_context = session.context.model_copy(
+            update={
+                "pending_action": None,
+                "active_task_id": task_state.id,
+                "last_confirmation_token": confirmation_token,
+                "last_confirmed_task_id": task_state.id,
+            }
+        )
+        self.store.update_context(session_id, cleared_context)
+        self.store.bind_task(session_id, task_state.id)
+        self.store.update_status(session_id, "running")
+        self._task_states[task_state.id] = task_state
+        execution = asyncio.create_task(
+            self._run_comparison_task(task_state, comparison_spec)
+        )
+        self._running_tasks[task_state.id] = execution
+        execution.add_done_callback(
+            lambda completed: self._on_task_done(session_id, task_state, completed)
+        )
+        return self._response(
+            self._require_session(session_id),
+            task_id=task_state.id,
+            status="running",
+            reply="已确认，开始进行多论文对比分析。",
+        )
+
+    async def _run_comparison_task(
+        self,
+        task_state: TaskState,
+        comparison_spec: ComparisonSpec,
+    ) -> None:
+        settings = get_settings()
+        tool_registry = self.orchestrator.tools
+
+        async def fetch_metadata(reference: PaperReference) -> dict[str, Any]:
+            if not reference.arxiv_id:
+                return {"title": reference.title or "", "url": reference.url}
+            result = await tool_registry.execute(
+                "arxiv_get_paper",
+                arxiv_id=reference.arxiv_id,
+            )
+            if not result.success:
+                raise RuntimeError(result.error or "arxiv_get_paper failed")
+            return result.data or {}
+
+        async def fetch_pdf(
+            reference: PaperReference,
+            metadata: dict[str, Any],
+        ) -> dict[str, Any]:
+            result = await tool_registry.execute(
+                "paper_download",
+                task_id=task_state.id,
+                paper={**metadata, "arxiv_id": reference.arxiv_id},
+            )
+            if not result.success:
+                raise RuntimeError(result.error or "paper_download failed")
+            return result.data or {}
+
+        acquisition = PaperAcquisitionService(
+            search_roots=[settings.artifact_dir, settings.workspace_dir],
+            metadata_fetcher=fetch_metadata,
+            pdf_fetcher=fetch_pdf,
+        )
+        workflow = PaperComparisonWorkflow(
+            acquisition,
+            artifact_enricher=lambda result: self._enrich_comparison_artifact(
+                task_state, result
+            ),
+            analyzer=lambda spec, facts: self._analyze_comparison(spec, facts),
+        )
+        artifact = await workflow.run(comparison_spec)
+        exports = PaperComparisonExporter().export(
+            artifact,
+            Path(task_state.artifact_dir),
+        )
+        artifact = artifact.model_copy(update={"exported_artifacts": exports})
+        result = await tool_registry.execute(
+            "save_artifact",
+            artifact_name="paper_comparison",
+            data=artifact.model_dump(mode="json"),
+            task_id=task_state.id,
+            _agent="orchestrator",
+            _phase="paper_comparison",
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "failed to persist comparison artifact")
+        task_state.metadata["comparison_status"] = "completed"
+        task_state.metadata["comparison_artifact"] = result.data
+        task_state.lifecycle_status = "completed"
+        await self.orchestrator.persistence.save_checkpoint(task_state)
+        await self._capture_task_memory(task_state)
+
+    async def _enrich_comparison_artifact(
+        self,
+        task_state: TaskState,
+        result,
+    ):
+        """Run the missing P11/P14 steps before comparison when possible."""
+        owner_task_id = result.reused_from_task_id or task_state.id
+        owner_dir = (
+            Path(task_state.artifact_dir)
+            if owner_task_id == task_state.id
+            else Path(get_settings().artifact_dir) / owner_task_id
+        )
+        artifact_path = self._relative_task_path(owner_dir, result.artifact_path)
+        if not artifact_path:
+            return result
+
+        parsed = await self.orchestrator.tools.execute(
+            "paper_parse",
+            task_id=owner_task_id,
+            artifact_path=artifact_path,
+            _agent="orchestrator",
+            _phase="paper_comparison",
+        )
+        if not parsed.success:
+            return result
+
+        artifact_file = owner_dir / artifact_path
+        data = self.orchestrator.persistence._load_json(artifact_file)
+        artifact = PaperArtifact.model_validate(data)
+        summary = await self._generate_comparison_summary(artifact)
+        if summary:
+            summarized = await self.orchestrator.tools.execute(
+                "paper_summary",
+                task_id=owner_task_id,
+                artifact_path=artifact_path,
+                summary=summary,
+                _agent="orchestrator",
+                _phase="paper_comparison",
+            )
+            if summarized.success:
+                data = self.orchestrator.persistence._load_json(artifact_file)
+                artifact = PaperArtifact.model_validate(data)
+            else:
+                # Keep the P14 result usable even if the adapter rejects an
+                # otherwise normalized response; the model above already
+                # enforces the same evidence shape.
+                artifact = artifact.model_copy(update=summary)
+                self.orchestrator.persistence._save_json(
+                    artifact_file,
+                    artifact.model_dump(mode="json"),
+                )
+
+        return replace(
+            result,
+            artifact=artifact,
+            artifact_path=artifact_path,
+            available_stages=("download", "parse", "summary")
+            if artifact.methodology_summary and artifact.summary_evidence
+            else ("download", "parse"),
+            reuse_level="paper_artifact_complete"
+            if artifact.methodology_summary and artifact.summary_evidence
+            else "paper_artifact_partial",
+        )
+
+    async def _generate_comparison_summary(
+        self,
+        artifact: PaperArtifact,
+    ) -> Optional[dict[str, Any]]:
+        sections = [
+            {
+                "section_id": section.section_id,
+                "title": section.title,
+                "original_text": section.original_text[:5000],
+            }
+            for section in artifact.sections
+        ]
+        prompt = (
+            "你是论文总结专家。请仅基于下面论文章节生成 JSON，不要补充章节中没有的事实。"
+            "所有 summary 字段必须是中文或保留原文，evidence 必须引用真实 section_id。\n"
+            "JSON 字段：research_questions(list), methodology_summary(string), "
+            "contributions(list), conclusions(list), limitations(list), "
+            "evidence(object，字段值为 section_id 列表)。\n\n"
+            + json.dumps(
+                {
+                    "title": artifact.title,
+                    "abstract": artifact.abstract,
+                    "sections": sections,
+                },
+                ensure_ascii=False,
+            )
+        )
+        response = await self.orchestrator.research.llm.agenerate(
+            messages=[
+                LLMMessage(
+                    role=MessageRole.SYSTEM,
+                    content="只输出合法 JSON，不要 Markdown 代码块。",
+                ),
+                LLMMessage(role=MessageRole.USER, content=prompt),
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=6000,
+        )
+        try:
+            data = self.orchestrator.research._extract_json(response.content)
+        except Exception:
+            data = {}
+        return self._normalize_comparison_summary(
+            data if isinstance(data, dict) else {},
+            artifact,
+        )
+
+    @staticmethod
+    def _normalize_comparison_summary(
+        data: dict[str, Any],
+        artifact: PaperArtifact,
+    ) -> dict[str, Any]:
+        """Make LLM P14 output satisfy the evidence-linked summary contract."""
+        section_ids = [section.section_id for section in artifact.sections]
+        if not section_ids:
+            return {}
+
+        def items(field: str) -> list[str]:
+            value = data.get(field, [])
+            if isinstance(value, str):
+                value = [value]
+            if not isinstance(value, list):
+                value = []
+            return [str(item).strip()[:1000] for item in value if str(item).strip()]
+
+        def evidence_for(field: str, has_content: bool) -> list[str]:
+            if not has_content:
+                return []
+            evidence = data.get("evidence", {})
+            value = evidence.get(field, []) if isinstance(evidence, dict) else []
+            if isinstance(value, str):
+                value = [value]
+            valid = [item for item in value if item in section_ids]
+            return valid or [section_ids[0]]
+
+        methodology = str(data.get("methodology_summary") or "").strip()
+        if not methodology:
+            methodology = PaperComparisonWorkflow._section_text(
+                artifact, ("method", "approach", "architecture", "model")
+            )
+        if methodology == "unknown":
+            methodology = artifact.sections[0].original_text[:1600].strip()
+
+        values = {
+            "research_questions": items("research_questions"),
+            "methodology_summary": methodology[:3000],
+            "contributions": items("contributions"),
+            "conclusions": items("conclusions"),
+            "limitations": items("limitations"),
+        }
+        if not values["research_questions"]:
+            values["research_questions"] = [
+                artifact.sections[0].original_text[:1000].strip()
+            ]
+        for field in ("contributions", "conclusions", "limitations"):
+            if not values[field]:
+                values[field] = ["未在当前章节中明确列出。"]
+        values["evidence"] = {
+            field: evidence_for(field, bool(value))
+            for field, value in values.items()
+            if field != "evidence"
+        }
+        return values
+
+    async def _analyze_comparison(self, spec, facts):
+        """Ask the LLM to interpret facts; code remains the source of truth."""
+        payload = [
+            {
+                "paper_id": fact.paper_id,
+                "title": fact.title,
+                "problem_definition": fact.problem_definition,
+                "methodology_summary": fact.methodology_summary,
+                "training_strategy": fact.training_strategy,
+                "datasets_and_metrics": fact.datasets_and_metrics,
+                "reported_results": fact.reported_results,
+                "limitations": fact.limitations,
+                "evidence": fact.evidence,
+            }
+            for fact in facts
+        ]
+        prompt = (
+            "请对以下多篇论文做研究级对比分析。只能基于输入事实，不能修改论文身份、"
+            "实验数值或证据。输出 JSON：commonalities(list)、differences(list)、"
+            "conclusion(string)、missing_information(list)。"
+            "differences 应明确指出方法和实验设置差异；conclusion 应说明适用场景和"
+            "不可直接横向比较的地方。不要输出输入之外的字段。\n\n"
+            f"比较维度：{json.dumps(spec.comparison_dimensions, ensure_ascii=False)}\n"
+            f"论文事实：{json.dumps(payload, ensure_ascii=False)}"
+        )
+        response = await self.orchestrator.research.llm.agenerate(
+            messages=[
+                LLMMessage(
+                    role=MessageRole.SYSTEM,
+                    content="你是严谨的学术比较分析器，只输出合法 JSON。",
+                ),
+                LLMMessage(role=MessageRole.USER, content=prompt),
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=5000,
+        )
+        try:
+            data = self.orchestrator.research._extract_json(response.content)
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            "commonalities": self._bounded_string_list(data.get("commonalities"), 500),
+            "differences": self._bounded_string_list(data.get("differences"), 800),
+            "conclusion": str(data.get("conclusion") or "")[:3000],
+            "missing_information": self._bounded_string_list(
+                data.get("missing_information"), 300
+            ),
+        }
+
+    @staticmethod
+    def _bounded_string_list(value: Any, limit: int) -> list[str]:
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        return [str(item)[:limit] for item in value if item not in (None, "")]
+
+    @staticmethod
+    def _relative_task_path(task_dir: Path, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        path = Path(value)
+        if path.is_absolute():
+            try:
+                return str(path.relative_to(task_dir))
+            except ValueError:
+                return None
+        if ".." in path.parts:
+            return None
+        return str(path)
 
     @staticmethod
     def _explicit_paper_from_decision(
@@ -797,6 +1217,157 @@ class ConversationApplicationService(ConversationService):
                     "artifact_refs": artifact_refs or [],
                 },
             )
+
+    def _capture_user_message_memory(
+        self,
+        session: ConversationSession,
+        message: ConversationMessage,
+    ) -> None:
+        """Capture only explicitly persistent-looking user preferences.
+
+        The extractor remains conservative: this hook is a candidate writer,
+        not an automatic fact generator. A future semantic extractor can
+        provide a structured request without changing the persistence path.
+        """
+        if not session.user_id or message.role != "user":
+            return
+        if not self._looks_like_persistent_preference(message.content):
+            return
+        candidate = self.memory_extractor.from_user_message(
+            content=message.content,
+            owner_user_id=session.user_id,
+            session_id=session.session_id,
+            message_id=message.message_id,
+            stable=True,
+            rationale="deterministic user preference hook",
+        )
+        if candidate is not None:
+            self.memory_pipeline.try_enqueue(candidate)
+
+    def _attach_task_memory_context(
+        self,
+        task_state: TaskState,
+        session: ConversationSession,
+        query_text: str,
+    ) -> None:
+        """Attach a bounded memory snapshot for ResearchAgent phase resets."""
+        if not session.user_id:
+            return
+        recall = self.memory_recall_service.search(
+            MemoryRecallQuery(
+                owner_user_id=session.user_id,
+                text=query_text,
+                max_chars=6000,
+                max_memory_chars=1200,
+            )
+        )
+        task_state.metadata["long_term_memory_ids"] = [
+            memory.memory_id for memory in recall.memories
+        ]
+        task_state.metadata["long_term_memory"] = [
+            memory.model_dump(mode="json") for memory in recall.memories
+        ]
+        task_state.metadata["long_term_memory_recall"] = {
+            "degraded": recall.degraded,
+            "truncated": recall.truncated,
+            "candidate_count": recall.candidate_count,
+        }
+        task_state.metadata["long_term_memory_query"] = {
+            "owner_user_id": session.user_id,
+            "text": query_text,
+        }
+
+    def _capture_selected_paper_confirmation(
+        self,
+        session: ConversationSession,
+        task_state: TaskState,
+        selected_paper: dict[str, Any],
+    ) -> None:
+        if not session.user_id:
+            return
+        paper_id = (
+            selected_paper.get("arxiv_id")
+            or selected_paper.get("id")
+            or selected_paper.get("title")
+        )
+        if not isinstance(paper_id, str) or not paper_id.strip():
+            return
+        candidate = self.memory_extractor.from_confirmation(
+            content=f"用户确认将论文 {paper_id.strip()} 作为研究目标。",
+            owner_user_id=session.user_id,
+            session_id=session.session_id,
+            task_id=task_state.id,
+            memory_type=MemoryType.RESEARCH_FACT,
+            rationale="explicit paper selection confirmation",
+        )
+        if candidate is not None:
+            self.memory_pipeline.try_enqueue(candidate)
+
+    async def _capture_task_memory(self, task_state: TaskState) -> None:
+        """Persist validated task outcome as a traceable candidate."""
+        if not task_state.session_id:
+            return
+        session = self.store.load_session(task_state.session_id)
+        if session is None or not session.user_id:
+            return
+
+        artifact_ids = [
+            artifact_id
+            for summary in task_state.phase_summaries
+            for artifact_id in summary.get("artifact_ids", [])
+            if isinstance(artifact_id, str) and artifact_id
+        ]
+        if task_state.lifecycle_status == "completed":
+            user_query = str(task_state.metadata.get("user_query") or "").strip()
+            content = (
+                f"用户完成了研究任务：{user_query}"
+                if user_query
+                else "用户完成了一项论文研究任务。"
+            )
+            candidate = self.memory_extractor.from_validated_task_result(
+                content=content,
+                owner_user_id=session.user_id,
+                task_id=task_state.id,
+                artifact_ids=artifact_ids,
+                rationale="orchestrator completed-task hook",
+            )
+        else:
+            reason = (
+                task_state.metadata.get("failure_reason")
+                or task_state.metadata.get("blocked_reason")
+                or task_state.metadata.get("exception")
+            )
+            if not reason:
+                return
+            candidate = self.memory_extractor.from_failure_diagnosis(
+                content=f"研究任务失败经验：{str(reason)[:1000]}",
+                owner_user_id=session.user_id,
+                task_id=task_state.id,
+                artifact_ids=artifact_ids,
+                rationale="orchestrator failed-task hook",
+            )
+        if candidate is not None:
+            self.memory_pipeline.try_enqueue(candidate)
+
+    @staticmethod
+    def _looks_like_persistent_preference(content: str) -> bool:
+        normalized = content.strip().lower()
+        markers = (
+            "以后",
+            "今后",
+            "长期",
+            "请始终",
+            "请一直",
+            "我的偏好",
+            "我偏好",
+            "我习惯",
+            "默认使用",
+            "from now on",
+            "i prefer",
+            "always",
+            "my preference",
+        )
+        return any(marker in normalized for marker in markers)
 
     def _capability_failure(
         self,

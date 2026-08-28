@@ -8,6 +8,7 @@ from .context_projection import (
     IntentContextProjection,
     IntentContextProjector,
     ProjectedConversationMessage,
+    ProjectedMemory,
 )
 from .clarification import (
     ClarificationPolicy,
@@ -45,6 +46,10 @@ from .paper_processing_workflow import (
     PaperProcessingWorkflowAdapter,
     PaperProcessingWorkflowRunner,
 )
+from .paper_comparison import (
+    PaperComparisonWorkflowAdapter,
+    PaperComparisonWorkflowRunner,
+)
 from .registry import (
     CapabilityRegistry,
     CapabilitySpec,
@@ -73,6 +78,7 @@ __all__ = [
     "IntentContextProjection",
     "IntentContextProjector",
     "ProjectedConversationMessage",
+    "ProjectedMemory",
     "ClarificationPolicy",
     "ClarificationPolicyConfig",
     "ClarificationResult",
@@ -98,6 +104,8 @@ __all__ = [
     "PaperSummaryAdapter",
     "PaperProcessingWorkflowAdapter",
     "PaperProcessingWorkflowRunner",
+    "PaperComparisonWorkflowAdapter",
+    "PaperComparisonWorkflowRunner",
     "CapabilityRegistry",
     "CapabilitySpec",
     "register_default_capabilities",

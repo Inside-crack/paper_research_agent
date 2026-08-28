@@ -64,6 +64,7 @@ class FakeToolRegistry:
 class FakeOrchestrator:
     def __init__(self, base_dir: Path):
         self.persistence = StatePersistence(base_dir)
+        self.created_research_specs = []
 
     async def create_task(self, **kwargs: Any) -> TaskState:
         if kwargs.get("resume_from_checkpoint"):
@@ -71,6 +72,7 @@ class FakeOrchestrator:
                 kwargs["resume_from_checkpoint"]
             )
         research_spec = kwargs["research_spec"]
+        self.created_research_specs.append(research_spec)
         state = TaskState(
             research_spec_id=research_spec.id,
             session_id=kwargs.get("session_id"),
@@ -244,7 +246,7 @@ def test_session_status_transitions_reject_illegal_changes_and_support_slash_sta
     asyncio.run(scenario())
 
 
-def test_explicit_arxiv_url_starts_processing_without_confirmation():
+def test_explicit_arxiv_url_requires_confirmation_before_processing():
     async def scenario():
         with tempfile.TemporaryDirectory() as tmpdir:
             store, session, service = make_service(tmpdir)
@@ -253,11 +255,20 @@ def test_explicit_arxiv_url_starts_processing_without_confirmation():
                 "处理这篇论文 https://arxiv.org/abs/2401.00099v2",
             )
 
-            assert response["status"] == "running"
-            assert "confirmation_token" not in response
+            assert response["status"] == "waiting_confirmation"
+            assert response["confirmation_token"]
             saved = store.load_session(session.session_id)
-            assert saved.context.pending_action is None
+            assert saved.context.pending_action is not None
             assert saved.context.selected_paper["arxiv_id"] == "2401.00099v2"
+            started = await service.confirm(
+                session.session_id,
+                response["confirmation_token"],
+            )
+            assert started["status"] == "running"
+            assert (
+                service.orchestrator.created_research_specs[-1].task_type
+                == "paper_analysis"
+            )
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             assert store.load_session(session.session_id).status == "completed"

@@ -1,8 +1,8 @@
 ## PHASE: Paper Retrieval & Screening
 
 Your task: Retrieve the confirmed target paper, search for relevant related papers,
-deduplicate (results are already pre-deduplicated for you), classify, rank, and
-save the candidate set.
+classify and rank them. The Orchestrator constructs and saves the final candidate
+artifact from tool facts. Do not generate or save the final candidate set yourself.
 
 **IMPORTANT**: Search results have already been deduplicated across queries by the Orchestrator. You just need to classify, rank, and select top papers.
 
@@ -23,12 +23,9 @@ save the candidate set.
    `top_recommendations`, even if keyword search does not return it.
 4. After searches, select TOP 10 related papers total (after pre-dedup)
 5. Classify each: survey, method, benchmark, application, experimental
-6. Rank by: relevance → code availability → recency
-7. **FINAL STEP (MANDATORY)**: Call save_artifact to save results
-   - artifact_name: "paper_candidates"
-   - data: {"target_paper": {...}, "target_paper_verified": true,
-     "candidates": [...target + top 10...], "total_found": N,
-     "top_recommendations": [...target id, top related ids...]}
+6. Rank by: relevance → reproducibility → recency
+7. Return only the bounded ranking instructions below. Do not call save_artifact
+   for "paper_candidates"; the Orchestrator owns that artifact.
 
 ### Available tools:
 - arxiv_search (max_results=15, include categories)
@@ -38,15 +35,20 @@ save the candidate set.
 ### Output format (synthesize result, CONCISE!):
 ```json
 {
-  "target_paper": {"arxiv_id": "xxxx.xxxxxv1", "title": "confirmed target"},
-  "target_paper_verified": true,
-  "candidates": [
-    {"arxiv_id": "xxxx.xxxxx", "title": "short title", "authors": ["A", "B"], "year": 2024, "type": "method", "relevance_score": 0.9, "reason": "short reason", "code_available": false}
+  "classifications": [
+    {
+      "arxiv_id": "xxxx.xxxxxv1",
+      "type": "method",
+      "relevance_score": 0.9,
+      "reproducibility_score": 0.8,
+      "recency_score": 0.7,
+      "reason": "short reason, at most 300 characters"
+    }
   ],
-  "candidate_set_id": "paper_candidates",
-  "total_found": 50,
-  "top_recommendations": ["id1", "id2", "id3"],
-  "search_queries_used": ["q1", "q2", "q3"]
+  "ordered_ids": ["target_id", "related_id"],
+  "ranking_rationale": "short rationale, at most 1000 characters"
 }
 ```
-Keep each candidate entry SHORT. Do NOT include abstracts in output. 10 candidates MAX.
+
+Only reference IDs returned by the tools. Do not invent titles, URLs, code
+availability, licenses, versions, or data availability. Tool facts always win.

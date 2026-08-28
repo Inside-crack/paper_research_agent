@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,17 +45,36 @@ class SaveArtifactTool(BaseTool):
 
         try:
             if format == "json":
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                serialized = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+                self._atomic_write_text(path, serialized)
             elif format == "text":
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(str(data))
+                self._atomic_write_text(path, str(data))
             else:
                 return ToolResult.fail(error=f"Unsupported format: {format}")
 
             return ToolResult.ok(data={"path": str(path), "artifact_name": artifact_name})
         except Exception as e:
             return ToolResult.fail(error=str(e))
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            text=True,
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
 
 
 class LoadArtifactTool(BaseTool):
